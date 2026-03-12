@@ -1,0 +1,64 @@
+
+STEPS :
+Step 1 — registerUser (Governance) ["did:gov:001","govSignPubKey123","govEncPubKey123","0xAb8483F64d9C6d1EcF9b849Ae677dD3315835cb2",3,true,1700000000,1700000000,0,"",""]
+
+Step 2 — registerUser (Approver 1) ["did:approver:001","approver1SignKey","approver1EncKey","0x4B20993Bc481177ec7E8f571ceCaE8A9e22C02db",1,true,1700000000,1700000000,0,"did:gov:001",""]
+
+Step 3 — registerUser (Approver 2) ["did:approver:002","approver2SignKey","approver2EncKey","0x78731D3Ca6b7E34aC0F824c42a7cC18A495cabaB",1,true,1700000000,1700000000,0,"did:gov:001",""]
+
+Step 4 — registerUser (Citizen) ["did:citizen:001","citizenSignKey","citizenEncKey","0x78731D3Ca6b7E34aC0F824c42a7cC18A495cabaB",0,true,1700000000,1700000000,0,"did:gov:001",""]
+
+Step 5 — registerUser (Verifier) ["did:verifier:001","verifierSignKey","verifierEncKey","0x1aE0EA34a72D944a8C7603FfB3eC30a6669E454C",2,true,1700000000,1700000000,0,"did:gov:001",""]
+
+Step 6 — getUser (verify governance) "did:gov:001"
+Check: role = 3, active = true
+Step 7 — getUser (verify citizen) "did:citizen:001"
+Check: role = 0, active = true
+
+Step 8 — createClaim [ "claim:national-id:001", "NationalID", "National Identity Credential", true, true, false, false, 2, 0, 1700000000, 0, "did:gov:001", "" ]
+Step 9 — approveClaim "claim:national-id:001" "did:gov:001"
+Step 10 — getClaim (verify) "claim:national-id:001"
+Check: status = 1 (ACTIVE), approvedByDid = did:gov:001
+
+Step 11 — createClaimRequest [ "req:001", "claim:national-id:001", "did:citizen:001", "QmDocHash123abc", "QmPhotoHash456def", "", "", 0, [], "", 1700000000, 1700000000, 1999999999 ]
+Step 12 — getClaimRequest (verify) "req:001"
+Check: status = 0 (PENDING)
+
+Step 13 — reviewClaimRequest (Approver 1) "req:001" "did:approver:001"
+Step 14 — reviewClaimRequest (Approver 2) "req:001" "did:approver:002"
+Step 15 — getApprovals (verify) "req:001"
+Check: two entries, both approved = false
+
+Step 16 — approveClaimRequest (Approver 1) "req:001" "did:approver:001"
+Step 17 — approveClaimRequest (Approver 2) — credential auto-issued here "req:001" "did:approver:002"
+Step 18 — getClaimRequest (verify) "req:001"
+Check: status = 3 (ISSUED)
+Step 19 — getApprovals (verify) "req:001"
+Check: both entries now show approved = true
+Step 20 — getCredential (verify) "cred_req:001"
+Check: status = 0 (ACTIVE), signatures array has two entries
+Step 21 — getCredentialsByCitizen (verify) "did:citizen:001"
+Check: returns array with one credential, credentialId = cred_req:001
+
+Step 22 — createVerificationRequest ["vreq:001","did:verifier:001","did:citizen:001",["claim:national-id:001"],0,1700000000,1999999999]
+Step 23 — getVerificationRequest (verify) "vreq:001"
+Check: status = 0 (REQUESTED), verifierDid = did:verifier:001
+
+Step 24 — submitPresentation ["pres:001","vreq:001","did:citizen:001","did:verifier:001",["cred_req:001"],"signedProof","nonce_abc123",1700000000,1999999999]
+Step 25 — verifyPresentation "pres:001"
+Check: returns true
+
+Step 26 — submitVerification ["verif:001","req:001","did:approver:001",1,"All documents verified and valid",1700000100]
+Step 27 — getVerificationsForRequest (verify) "req:001"
+Check: one entry, status = 1 (APPROVED)
+
+Step 28 — revokeCredential ["cred_req:001","did:gov:001","Document found to be fraudulent",1700005000]
+Step 29 — isCredentialRevoked (verify) "cred_req:001"
+Check: returns true
+Step 30 — getCredential (verify revocation) "cred_req:001"
+Check: status = 1 (REVOKED)
+
+Step 31 — deactivateUser "did:citizen:001"
+Step 32 — getUser (verify deactivation) "did:citizen:001"
+Check: active = false, revokedAt is set to a non-zero timestamp
+
