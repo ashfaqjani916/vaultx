@@ -3,10 +3,9 @@ import { useVaultStore } from '@/store/useVaultStore';
 import { WalletConnectionButton } from '@/components/WalletConnectionButton';
 import { DIDDisplay } from '@/components/DIDDisplay';
 import { Bell } from 'lucide-react';
-import { Badge } from '@/components/ui/badge';
 
 export function TopBar() {
-  const { walletConnected, did, activities } = useVaultStore();
+  const { did, activities } = useVaultStore();
 
   return (
     <header className="h-14 flex items-center justify-between border-b border-border px-4 bg-card/50 backdrop-blur-sm">

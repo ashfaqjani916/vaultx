@@ -6,6 +6,7 @@ interface VaultState {
   walletConnected: boolean;
   walletAddress: string;
   currentRole: UserRole;
+  setWalletConnection: (connected: boolean, address?: string) => void;
   
   // Identity
   did: DID | null;
@@ -89,6 +90,12 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   verificationRequests: [],
   auditLogs: mockAuditLogs,
   activities: mockActivities,
+
+  setWalletConnection: (connected, address = '') => set((state) => ({
+    walletConnected: connected,
+    walletAddress: connected ? address : '',
+    did: connected ? state.did : null,
+  })),
 
   connectWallet: () => set({
     walletConnected: true,

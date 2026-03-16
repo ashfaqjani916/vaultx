@@ -1,8 +1,10 @@
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { useVaultStore } from '@/store/useVaultStore';
-import { Shield, Fingerprint, Lock, Hexagon, ArrowRight, CheckCircle2 } from 'lucide-react';
+import { Shield, Fingerprint, Lock, Hexagon, ArrowRight } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { ConnectButton } from 'thirdweb/react';
+import { thirdwebAuth, thirdwebClient, thirdwebWallets } from '@/lib/thirdweb';
 
 const features = [
   { icon: Fingerprint, title: 'User-Controlled Identity', desc: 'Own your digital identity without relying on centralized authorities. Your keys, your data.' },
@@ -12,12 +14,7 @@ const features = [
 
 export default function LandingPage() {
   const navigate = useNavigate();
-  const { connectWallet, walletConnected } = useVaultStore();
-
-  const handleConnect = () => {
-    if (!walletConnected) connectWallet();
-    navigate('/dashboard');
-  };
+  const { walletConnected } = useVaultStore();
 
   return (
     <div className="min-h-screen bg-background">
@@ -29,10 +26,23 @@ export default function LandingPage() {
           </div>
           <span className="text-lg font-bold tracking-tight">VaultX</span>
         </div>
-        <Button onClick={handleConnect} className="gradient-primary text-primary-foreground text-sm font-medium">
-          {walletConnected ? 'Go to Dashboard' : 'Connect Wallet'}
-          <ArrowRight className="h-4 w-4 ml-1.5" />
-        </Button>
+        {walletConnected ? (
+          <Button onClick={() => navigate('/dashboard')} className="gradient-primary text-primary-foreground text-sm font-medium">
+            Go to Dashboard
+            <ArrowRight className="h-4 w-4 ml-1.5" />
+          </Button>
+        ) : (
+          <ConnectButton
+            client={thirdwebClient}
+            wallets={thirdwebWallets}
+            auth={thirdwebAuth}
+            onConnect={() => navigate('/dashboard')}
+            connectButton={{
+              label: 'Connect Wallet',
+              className: 'gradient-primary text-primary-foreground text-sm font-medium',
+            }}
+          />
+        )}
       </nav>
 
       {/* Hero */}
@@ -49,9 +59,22 @@ export default function LandingPage() {
             Take control of your digital identity. Create decentralized identifiers, manage verifiable credentials, and prove claims without exposing personal data — all secured by cryptography.
           </p>
           <div className="flex items-center justify-center gap-4">
-            <Button size="lg" className="gradient-primary text-primary-foreground font-semibold px-8" onClick={handleConnect}>
-              Connect Wallet
-            </Button>
+            {walletConnected ? (
+              <Button size="lg" className="gradient-primary text-primary-foreground font-semibold px-8" onClick={() => navigate('/dashboard')}>
+                Go to Dashboard
+              </Button>
+            ) : (
+              <ConnectButton
+                client={thirdwebClient}
+                wallets={thirdwebWallets}
+                auth={thirdwebAuth}
+                onConnect={() => navigate('/dashboard')}
+                connectButton={{
+                  label: 'Connect Wallet',
+                  className: 'gradient-primary text-primary-foreground font-semibold px-8 h-11',
+                }}
+              />
+            )}
             <Button size="lg" variant="outline" onClick={() => navigate('/dashboard')} className="font-semibold px-8">
               Create Identity
             </Button>

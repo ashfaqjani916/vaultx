@@ -4,7 +4,8 @@ import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Button } from '@/components/ui/button';
 import type { UserRole } from '@/types';
-import { Settings as SettingsIcon } from 'lucide-react';
+import { ConnectButton, useActiveAccount, useActiveWallet, useDisconnect } from 'thirdweb/react';
+import { thirdwebAuth, thirdwebClient, thirdwebWallets } from '@/lib/thirdweb';
 
 const roles: { value: UserRole; label: string }[] = [
   { value: 'citizen', label: 'Citizen' },
@@ -14,7 +15,10 @@ const roles: { value: UserRole; label: string }[] = [
 ];
 
 export default function SettingsPage() {
-  const { currentRole, setRole, walletAddress, walletConnected, disconnectWallet } = useVaultStore();
+  const { currentRole, setRole, walletAddress, walletConnected } = useVaultStore();
+  const account = useActiveAccount();
+  const activeWallet = useActiveWallet();
+  const { disconnect } = useDisconnect();
 
   return (
     <div className="space-y-6 animate-fade-in max-w-2xl">
@@ -37,10 +41,32 @@ export default function SettingsPage() {
         {walletConnected && (
           <div>
             <Label className="text-xs mb-1.5 block">Wallet Address</Label>
-            <code className="text-xs font-mono bg-muted px-3 py-2 rounded block">{walletAddress}</code>
-            <Button variant="outline" size="sm" className="mt-3 text-xs" onClick={disconnectWallet}>
+            <code className="text-xs font-mono bg-muted px-3 py-2 rounded block">{account?.address ?? walletAddress}</code>
+            <Button
+              variant="outline"
+              size="sm"
+              className="mt-3 text-xs"
+              onClick={() => {
+                if (activeWallet) disconnect(activeWallet);
+              }}
+            >
               Disconnect Wallet
             </Button>
+          </div>
+        )}
+
+        {!walletConnected && (
+          <div>
+            <Label className="text-xs mb-2 block">Wallet</Label>
+            <ConnectButton
+              client={thirdwebClient}
+              wallets={thirdwebWallets}
+              auth={thirdwebAuth}
+              connectButton={{
+                label: 'Connect Wallet',
+                className: 'gradient-primary text-primary-foreground text-xs',
+              }}
+            />
           </div>
         )}
       </Card>

@@ -3,11 +3,13 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { DIDDisplay } from '@/components/DIDDisplay';
 import { CredentialCard } from '@/components/CredentialCard';
-import { Key, RefreshCw, Download, Fingerprint } from 'lucide-react';
+import { RefreshCw, Download, Fingerprint } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { ConnectButton } from 'thirdweb/react';
+import { thirdwebAuth, thirdwebClient, thirdwebWallets } from '@/lib/thirdweb';
 
 export default function IdentityWallet() {
-  const { did, generateDID, credentials, walletConnected, connectWallet } = useVaultStore();
+  const { did, generateDID, credentials, walletConnected } = useVaultStore();
 
   if (!walletConnected) {
     return (
@@ -15,7 +17,15 @@ export default function IdentityWallet() {
         <Fingerprint className="h-16 w-16 text-muted-foreground/30 mb-4" />
         <h2 className="text-xl font-semibold mb-2">Connect Your Wallet</h2>
         <p className="text-sm text-muted-foreground mb-6">Connect a wallet to access your identity</p>
-        <Button onClick={connectWallet} className="gradient-primary text-primary-foreground">Connect Wallet</Button>
+        <ConnectButton
+          client={thirdwebClient}
+          wallets={thirdwebWallets}
+          auth={thirdwebAuth}
+          connectButton={{
+            label: 'Connect Wallet',
+            className: 'gradient-primary text-primary-foreground',
+          }}
+        />
       </div>
     );
   }
