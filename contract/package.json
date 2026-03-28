@@ -1,0 +1,10 @@
+{
+  "name": "ssi-contract",
+  "private": true,
+  "scripts": {
+    "build": "hardhat compile"
+  },
+  "devDependencies": {
+    "hardhat": "^2.22.2"
+  }
+}
