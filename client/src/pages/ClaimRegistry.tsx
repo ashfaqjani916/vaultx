@@ -1,37 +1,178 @@
-import { useState } from 'react';
-import { useVaultStore } from '@/store/useVaultStore';
-import { Card } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Switch } from '@/components/ui/switch';
-import { StatusBadge } from '@/components/StatusBadge';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
-import { Plus } from 'lucide-react';
-import { motion } from 'framer-motion';
+import { useMemo, useState } from "react";
+import { useQueries } from "@tanstack/react-query";
+import { readContract } from "thirdweb";
+import { Card } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import { StatusBadge } from "@/components/StatusBadge";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Plus } from "lucide-react";
+import { motion } from "framer-motion";
+import { toast } from "@/hooks/use-toast";
+import { useSSIContract, useSSIWrite } from "@/hooks/useSSIContract";
+import { useOnchainUser } from "@/hooks/useOnchainUser";
+import { ssiContract } from "@/lib/thirdweb";
+import { ssiMethods } from "@/lib/ssiMethods";
+import { claimStatusLabel, parseSsiClaim } from "@/lib/ssiParsers";
+
+const CLAIM_IDS_STORAGE_KEY = "ssi.claim.ids.v1";
+
+type ClaimRow = {
+  id: string;
+  name: string;
+  description: string;
+  requiredDocs: string[];
+  approvalsNeeded: number;
+  status: "active" | "pending" | "rejected" | "deprecated";
+};
+
+function readStoredClaimIds(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const raw = window.localStorage.getItem(CLAIM_IDS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.filter((value) => typeof value === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeStoredClaimIds(ids: string[]) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(CLAIM_IDS_STORAGE_KEY, JSON.stringify(ids));
+}
 
 export default function ClaimRegistry() {
-  const { claimDefinitions, addClaimDefinition } = useVaultStore();
+  const { account, isConfigured } = useSSIContract();
+  const { role } = useOnchainUser();
+  const { writeByName, isPending } = useSSIWrite();
+  const [claimIds, setClaimIds] = useState<string[]>(() => readStoredClaimIds());
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({
-    name: '', description: '', requiredDocs: '',
-    photoRequired: false, geoRequired: false, biometricRequired: false, approvalsNeeded: 1,
+    name: "",
+    description: "",
+    requiredDocs: "",
+    photoRequired: false,
+    geoRequired: false,
+    biometricRequired: false,
+    approvalsNeeded: 1,
   });
 
-  const handleCreate = () => {
-    addClaimDefinition({
-      name: form.name,
-      description: form.description,
-      requiredDocs: form.requiredDocs.split(',').map(d => d.trim()).filter(Boolean),
-      photoRequired: form.photoRequired,
-      geoRequired: form.geoRequired,
-      biometricRequired: form.biometricRequired,
-      approvalsNeeded: form.approvalsNeeded,
-    });
-    setForm({ name: '', description: '', requiredDocs: '', photoRequired: false, geoRequired: false, biometricRequired: false, approvalsNeeded: 1 });
-    setOpen(false);
+  const claimQueries = useQueries({
+    queries: claimIds.map((claimId) => ({
+      queryKey: ["ssi-claim", claimId],
+      queryFn: () =>
+        readContract({
+          contract: ssiContract,
+          method: ssiMethods.getClaim,
+          params: [claimId],
+        }),
+      enabled: isConfigured,
+      retry: 1,
+    })),
+  });
+
+  const claimDefinitions = useMemo<ClaimRow[]>(() => {
+    return claimQueries
+      .map((query, index) => {
+        if (!query.data) return null;
+        const parsed = parseSsiClaim(query.data);
+        return {
+          id: parsed.claimId || claimIds[index],
+          name: parsed.claimType,
+          description: parsed.description,
+          requiredDocs: parsed.documentRequired ? ["Document Hash Required"] : [],
+          approvalsNeeded: Number(parsed.numberOfApprovalsNeeded),
+          status: claimStatusLabel(parsed.status),
+        };
+      })
+      .filter((claim): claim is ClaimRow => Boolean(claim));
+  }, [claimIds, claimQueries]);
+
+  const handleCreate = async () => {
+    if (role !== "governance") {
+      toast({
+        title: "Only governance can create claims",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!isConfigured) {
+      toast({
+        title: "Missing contract configuration",
+        description: "Set VITE_SSI_CONTRACT_ADDRESS in client/.env",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    if (!account) {
+      toast({ title: "Connect wallet first" });
+      return;
+    }
+
+    if (!form.name.trim()) {
+      toast({ title: "Claim name is required", variant: "destructive" });
+      return;
+    }
+
+    const claimId = `claim-${Date.now()}`;
+    const actorDid = `did:ssi:${account.address.toLowerCase()}`;
+    const now = BigInt(Math.floor(Date.now() / 1000));
+
+    try {
+      await writeByName("createClaim", [
+        {
+          claimId,
+          claimType: form.name.trim(),
+          description: form.description.trim(),
+          documentRequired: form.requiredDocs.trim().length > 0,
+          photoRequired: form.photoRequired,
+          geolocationRequired: form.geoRequired,
+          biometricRequired: form.biometricRequired,
+          numberOfApprovalsNeeded: BigInt(form.approvalsNeeded),
+          status: 0,
+          createdAt: now,
+          approvedAt: 0n,
+          createdByDid: actorDid,
+          approvedByDid: "",
+        },
+      ]);
+
+      const nextIds = [claimId, ...claimIds.filter((id) => id !== claimId)];
+      setClaimIds(nextIds);
+      writeStoredClaimIds(nextIds);
+
+      setForm({
+        name: "",
+        description: "",
+        requiredDocs: "",
+        photoRequired: false,
+        geoRequired: false,
+        biometricRequired: false,
+        approvalsNeeded: 1,
+      });
+      setOpen(false);
+
+      toast({
+        title: "Claim definition created",
+        description: claimId,
+      });
+    } catch (error) {
+      toast({
+        title: "Failed to create claim",
+        description: error instanceof Error ? error.message : "Transaction failed",
+        variant: "destructive",
+      });
+    }
   };
+
+  const hasReadError = claimQueries.some((query) => query.isError);
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -42,7 +183,10 @@ export default function ClaimRegistry() {
         </div>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
-            <Button className="gradient-primary text-primary-foreground text-sm">
+            <Button
+              className="gradient-primary text-primary-foreground text-sm"
+              disabled={!isConfigured || role !== "governance"}
+            >
               <Plus className="h-4 w-4 mr-1.5" /> New Claim
             </Button>
           </DialogTrigger>
@@ -60,11 +204,35 @@ export default function ClaimRegistry() {
                 <div className="flex items-center gap-2"><Switch checked={form.biometricRequired} onCheckedChange={v => setForm(f => ({ ...f, biometricRequired: v }))} /><Label className="text-xs">Biometric</Label></div>
                 <div><Label className="text-xs">Approvals Needed</Label><Input type="number" min={1} value={form.approvalsNeeded} onChange={e => setForm(f => ({ ...f, approvalsNeeded: parseInt(e.target.value) || 1 }))} /></div>
               </div>
-              <Button onClick={handleCreate} className="w-full gradient-primary text-primary-foreground">Create Claim</Button>
+              <Button
+                onClick={handleCreate}
+                disabled={isPending || !isConfigured || role !== "governance"}
+                className="w-full gradient-primary text-primary-foreground"
+              >
+                {isPending ? "Creating..." : "Create Claim"}
+              </Button>
             </div>
           </DialogContent>
         </Dialog>
       </div>
+
+      {!isConfigured && (
+        <Card className="p-4 border-destructive/40 bg-destructive/5 text-sm text-destructive">
+          Set <code>VITE_SSI_CONTRACT_ADDRESS</code> in <code>client/.env</code> to enable on-chain claim registry.
+        </Card>
+      )}
+
+      {role !== "governance" && (
+        <Card className="p-4 border-destructive/40 bg-destructive/5 text-sm text-destructive">
+          Claim creation is restricted to governance users.
+        </Card>
+      )}
+
+      {hasReadError && (
+        <Card className="p-4 border-destructive/40 bg-destructive/5 text-sm text-destructive">
+          Some claim entries failed to load. Check if the stored IDs match deployed contract data.
+        </Card>
+      )}
 
       <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
         <Card className="shadow-card border-border bg-card overflow-hidden">
@@ -85,11 +253,18 @@ export default function ClaimRegistry() {
                   <TableCell className="text-xs font-mono">{d.id}</TableCell>
                   <TableCell className="text-xs font-medium">{d.name}</TableCell>
                   <TableCell className="text-xs text-muted-foreground">{d.description}</TableCell>
-                  <TableCell className="text-xs">{d.requiredDocs.join(', ')}</TableCell>
+                  <TableCell className="text-xs">{d.requiredDocs.join(", ") || "-"}</TableCell>
                   <TableCell className="text-xs">{d.approvalsNeeded}</TableCell>
                   <TableCell><StatusBadge status={d.status} /></TableCell>
                 </TableRow>
               ))}
+              {claimDefinitions.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={6} className="text-center text-xs text-muted-foreground py-8">
+                    No on-chain claims tracked yet. Create one to get started.
+                  </TableCell>
+                </TableRow>
+              )}
             </TableBody>
           </Table>
         </Card>

@@ -6,6 +6,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { ThirdwebProvider } from "thirdweb/react";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { ThirdwebWalletSync } from "@/components/ThirdwebWalletSync";
+import { RoleGuard } from "@/components/auth/RoleGuard";
 import Landing from "./pages/Landing";
 import Dashboard from "./pages/Dashboard";
 import IdentityWallet from "./pages/IdentityWallet";
@@ -27,19 +28,87 @@ const App = () => (
         <ThirdwebWalletSync />
         <Toaster />
         <Sonner />
-        <BrowserRouter>
+        <BrowserRouter
+          future={{
+            v7_startTransition: true,
+            v7_relativeSplatPath: true,
+          }}
+        >
           <Routes>
             <Route path="/" element={<Landing />} />
             <Route element={<AppLayout />}>
-              <Route path="/dashboard" element={<Dashboard />} />
-              <Route path="/identity" element={<IdentityWallet />} />
-              <Route path="/claims" element={<ClaimRegistry />} />
-              <Route path="/claim-requests" element={<ClaimRequests />} />
-              <Route path="/verification" element={<Verification />} />
-              <Route path="/credentials" element={<Credentials />} />
-              <Route path="/verification-requests" element={<VerificationRequests />} />
-              <Route path="/audit-logs" element={<AuditLogs />} />
-              <Route path="/settings" element={<SettingsPage />} />
+              <Route
+                path="/dashboard"
+                element={
+                  <RoleGuard>
+                    <Dashboard />
+                  </RoleGuard>
+                }
+              />
+              <Route
+                path="/identity"
+                element={
+                  <RoleGuard requireRegistered={false}>
+                    <IdentityWallet />
+                  </RoleGuard>
+                }
+              />
+              <Route
+                path="/claims"
+                element={
+                  <RoleGuard allowedRoles={["governance"]}>
+                    <ClaimRegistry />
+                  </RoleGuard>
+                }
+              />
+              <Route
+                path="/claim-requests"
+                element={
+                  <RoleGuard allowedRoles={["citizen", "approver"]}>
+                    <ClaimRequests />
+                  </RoleGuard>
+                }
+              />
+              <Route
+                path="/verification"
+                element={
+                  <RoleGuard allowedRoles={["approver"]}>
+                    <Verification />
+                  </RoleGuard>
+                }
+              />
+              <Route
+                path="/credentials"
+                element={
+                  <RoleGuard allowedRoles={["citizen", "approver"]}>
+                    <Credentials />
+                  </RoleGuard>
+                }
+              />
+              <Route
+                path="/verification-requests"
+                element={
+                  <RoleGuard allowedRoles={["verifier"]}>
+                    <VerificationRequests />
+                  </RoleGuard>
+                }
+              />
+              <Route
+                path="/audit-logs"
+                element={
+                  <RoleGuard allowedRoles={["governance"]}>
+                    <AuditLogs />
+                  </RoleGuard>
+                }
+              />
+              <Route
+                path="/settings"
+                element={
+                  <RoleGuard requireRegistered={false}>
+                    <SettingsPage />
+                  </RoleGuard>
+                }
+              />
             </Route>
             <Route path="*" element={<NotFound />} />
           </Routes>

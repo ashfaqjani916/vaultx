@@ -3,15 +3,17 @@ import { useVaultStore } from '@/store/useVaultStore';
 import { WalletConnectionButton } from '@/components/WalletConnectionButton';
 import { DIDDisplay } from '@/components/DIDDisplay';
 import { Bell } from 'lucide-react';
+import { useOnchainUser } from '@/hooks/useOnchainUser';
 
 export function TopBar() {
-  const { did, activities } = useVaultStore();
+  const { activities } = useVaultStore();
+  const { did, isRegistered } = useOnchainUser();
 
   return (
     <header className="h-14 flex items-center justify-between border-b border-border px-4 bg-card/50 backdrop-blur-sm">
       <div className="flex items-center gap-3">
         <SidebarTrigger className="text-muted-foreground hover:text-foreground" />
-        {did && <DIDDisplay did={did.id} compact />}
+        {isRegistered && did && <DIDDisplay did={did} compact />}
       </div>
       <div className="flex items-center gap-3">
         <button className="relative p-2 rounded-md hover:bg-muted transition-colors">

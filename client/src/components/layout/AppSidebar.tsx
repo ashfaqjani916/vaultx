@@ -1,22 +1,19 @@
 import {
   LayoutDashboard, Wallet, FileText, ClipboardList, ShieldCheck,
-  Award, FileSearch, ScrollText, Settings, ChevronDown, Hexagon
+  Award, FileSearch, ScrollText, Settings, Hexagon
 } from 'lucide-react';
 import { NavLink } from '@/components/NavLink';
-import { useLocation } from 'react-router-dom';
 import {
   Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent,
   SidebarGroupLabel, SidebarMenu, SidebarMenuButton, SidebarMenuItem, useSidebar,
 } from '@/components/ui/sidebar';
-import { useVaultStore } from '@/store/useVaultStore';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
+import { useOnchainUser } from '@/hooks/useOnchainUser';
+import { userRoleLabel } from '@/lib/ssiParsers';
 import type { UserRole } from '@/types';
 
 const navItems = [
   { title: 'Dashboard', url: '/dashboard', icon: LayoutDashboard, roles: ['citizen', 'approver', 'verifier', 'governance'] },
-  { title: 'Identity Wallet', url: '/identity', icon: Wallet, roles: ['citizen'] },
+  { title: 'Identity Wallet', url: '/identity', icon: Wallet, roles: ['citizen', 'approver', 'verifier', 'governance'] },
   { title: 'Claim Registry', url: '/claims', icon: FileText, roles: ['governance'] },
   { title: 'Claim Requests', url: '/claim-requests', icon: ClipboardList, roles: ['citizen', 'approver'] },
   { title: 'Verification', url: '/verification', icon: ShieldCheck, roles: ['approver'] },
@@ -26,18 +23,15 @@ const navItems = [
   { title: 'Settings', url: '/settings', icon: Settings, roles: ['citizen', 'approver', 'verifier', 'governance'] },
 ];
 
-const roles: { value: UserRole; label: string }[] = [
-  { value: 'citizen', label: 'Citizen' },
-  { value: 'approver', label: 'Approver' },
-  { value: 'verifier', label: 'Verifier' },
-  { value: 'governance', label: 'Governance' },
-];
-
 export function AppSidebar() {
   const { state } = useSidebar();
   const collapsed = state === 'collapsed';
-  const location = useLocation();
-  const { currentRole, setRole } = useVaultStore();
+  const { role, isRegistered } = useOnchainUser();
+  const currentRole: UserRole = role ?? 'citizen';
+
+  const allowedNav = isRegistered
+    ? navItems.filter((item) => item.roles.includes(currentRole))
+    : navItems.filter((item) => item.url === '/identity' || item.url === '/settings');
 
   return (
     <Sidebar collapsible="icon" className="border-r border-sidebar-border">
@@ -58,16 +52,9 @@ export function AppSidebar() {
         {!collapsed && (
           <div className="px-3 py-3 border-b border-sidebar-border">
             <label className="text-[10px] uppercase tracking-widest text-sidebar-foreground mb-1.5 block font-medium">Role</label>
-            <Select value={currentRole} onValueChange={(v) => setRole(v as UserRole)}>
-              <SelectTrigger className="bg-sidebar-accent border-sidebar-border text-sidebar-accent-foreground h-8 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {roles.map((r) => (
-                  <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <div className="h-8 px-2.5 rounded-md bg-sidebar-accent border border-sidebar-border text-sidebar-accent-foreground text-xs flex items-center">
+              {userRoleLabel(role)}
+            </div>
           </div>
         )}
 
@@ -77,7 +64,7 @@ export function AppSidebar() {
           </SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu>
-              {navItems.filter((item) => item.roles.includes(currentRole)).map((item) => (
+              {allowedNav.map((item) => (
                 <SidebarMenuItem key={item.title}>
                   <SidebarMenuButton asChild>
                     <NavLink

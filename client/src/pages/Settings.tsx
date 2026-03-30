@@ -1,24 +1,16 @@
-import { Card } from '@/components/ui/card';
-import { useVaultStore } from '@/store/useVaultStore';
-import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Button } from '@/components/ui/button';
-import type { UserRole } from '@/types';
-import { ConnectButton, useActiveAccount, useActiveWallet, useDisconnect } from 'thirdweb/react';
-import { thirdwebAuth, thirdwebClient, thirdwebWallets } from '@/lib/thirdweb';
-
-const roles: { value: UserRole; label: string }[] = [
-  { value: 'citizen', label: 'Citizen' },
-  { value: 'approver', label: 'Approver' },
-  { value: 'verifier', label: 'Verifier' },
-  { value: 'governance', label: 'Governance' },
-];
+import { Card } from "@/components/ui/card";
+import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
+import { ConnectButton, useActiveAccount, useActiveWallet, useDisconnect } from "thirdweb/react";
+import { thirdwebAuth, thirdwebClient, thirdwebWallets } from "@/lib/thirdweb";
+import { useOnchainUser } from "@/hooks/useOnchainUser";
+import { userRoleLabel } from "@/lib/ssiParsers";
 
 export default function SettingsPage() {
-  const { currentRole, setRole, walletAddress, walletConnected } = useVaultStore();
   const account = useActiveAccount();
   const activeWallet = useActiveWallet();
   const { disconnect } = useDisconnect();
+  const { isConnected, role, did, isRegistered } = useOnchainUser();
 
   return (
     <div className="space-y-6 animate-fade-in max-w-2xl">
@@ -29,19 +21,21 @@ export default function SettingsPage() {
 
       <Card className="p-6 shadow-card border-border bg-card space-y-6">
         <div>
-          <Label className="text-xs mb-1.5 block">Active Role</Label>
-          <Select value={currentRole} onValueChange={(v) => setRole(v as UserRole)}>
-            <SelectTrigger className="w-full max-w-xs"><SelectValue /></SelectTrigger>
-            <SelectContent>
-              {roles.map(r => <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>)}
-            </SelectContent>
-          </Select>
+          <Label className="text-xs mb-1.5 block">On-Chain Role</Label>
+          <div className="text-sm px-3 py-2 rounded bg-muted w-full max-w-xs">{userRoleLabel(role)}</div>
         </div>
 
-        {walletConnected && (
+        {isRegistered && (
+          <div>
+            <Label className="text-xs mb-1.5 block">DID</Label>
+            <code className="text-xs font-mono bg-muted px-3 py-2 rounded block">{did}</code>
+          </div>
+        )}
+
+        {isConnected && (
           <div>
             <Label className="text-xs mb-1.5 block">Wallet Address</Label>
-            <code className="text-xs font-mono bg-muted px-3 py-2 rounded block">{account?.address ?? walletAddress}</code>
+            <code className="text-xs font-mono bg-muted px-3 py-2 rounded block">{account?.address}</code>
             <Button
               variant="outline"
               size="sm"
@@ -55,7 +49,7 @@ export default function SettingsPage() {
           </div>
         )}
 
-        {!walletConnected && (
+        {!isConnected && (
           <div>
             <Label className="text-xs mb-2 block">Wallet</Label>
             <ConnectButton
@@ -63,8 +57,8 @@ export default function SettingsPage() {
               wallets={thirdwebWallets}
               auth={thirdwebAuth}
               connectButton={{
-                label: 'Connect Wallet',
-                className: 'gradient-primary text-primary-foreground text-xs',
+                label: "Connect Wallet",
+                className: "gradient-primary text-primary-foreground text-xs",
               }}
             />
           </div>

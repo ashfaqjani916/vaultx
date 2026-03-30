@@ -3,11 +3,14 @@ import { Card } from '@/components/ui/card';
 import { Award, Clock, ShieldCheck, FileX, Activity, Users, ArrowUpRight, FileText, ClipboardList, FileSearch, ScrollText } from 'lucide-react';
 import { StatusBadge } from '@/components/StatusBadge';
 import { motion } from 'framer-motion';
+import { useOnchainUser } from '@/hooks/useOnchainUser';
 
 const cardAnim = (i: number) => ({ initial: { opacity: 0, y: 12 }, animate: { opacity: 1, y: 0 }, transition: { delay: i * 0.08 } });
 
 export default function Dashboard() {
-  const { did, credentials, claimRequests, activities, walletConnected, currentRole, verificationRequests, auditLogs } = useVaultStore();
+  const { credentials, claimRequests, activities, verificationRequests, auditLogs } = useVaultStore();
+  const { did, role, user } = useOnchainUser();
+  const currentRole = role ?? 'citizen';
 
   // Role-specific stats
   const roleStats = {
@@ -80,15 +83,17 @@ export default function Dashboard() {
                 <div className="space-y-3">
                   <div className="flex justify-between text-xs">
                     <span className="text-muted-foreground">DID</span>
-                    <span className="font-mono text-card-foreground">{did.id.slice(0, 20)}...</span>
+                    <span className="font-mono text-card-foreground">{did.slice(0, 20)}...</span>
                   </div>
                   <div className="flex justify-between text-xs">
                     <span className="text-muted-foreground">Status</span>
-                    <StatusBadge status={did.status} />
+                    <StatusBadge status={user?.active ? 'active' : 'deactivated'} />
                   </div>
                   <div className="flex justify-between text-xs">
                     <span className="text-muted-foreground">Created</span>
-                    <span className="text-card-foreground">{new Date(did.created).toLocaleDateString()}</span>
+                    <span className="text-card-foreground">
+                      {user ? new Date(Number(user.createdAt) * 1000).toLocaleDateString() : '-'}
+                    </span>
                   </div>
                 </div>
               ) : (
