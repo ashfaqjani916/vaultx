@@ -119,3 +119,124 @@ export function userRoleLabel(role: OnchainUserRole | null): string {
   if (role === "citizen") return "Citizen";
   return "Unregistered";
 }
+
+// ─── ClaimRequest ────────────────────────────────────────────────────────────
+
+export type SsiClaimRequest = {
+  requestId: string;
+  claimId: string;
+  citizenDid: string;
+  documentHash: string;
+  photoHash: string;
+  geolocationHash: string;
+  biometricHash: string;
+  /** 0=PENDING 1=IN_REVIEW 2=APPROVED 3=ISSUED 4=REJECTED 5=EXPIRED */
+  status: number;
+  approverDids: string[];
+  finalApproverDid: string;
+  createdAt: bigint;
+  updatedAt: bigint;
+  expiresAt: bigint;
+};
+
+const asStringArray = (value: unknown): string[] => {
+  if (Array.isArray(value)) return (value as unknown[]).map(String);
+  return [];
+};
+
+export function parseSsiClaimRequest(raw: unknown): SsiClaimRequest {
+  return {
+    requestId: String(pick(raw, "requestId", 0, "")),
+    claimId: String(pick(raw, "claimId", 1, "")),
+    citizenDid: String(pick(raw, "citizenDid", 2, "")),
+    documentHash: String(pick(raw, "documentHash", 3, "")),
+    photoHash: String(pick(raw, "photoHash", 4, "")),
+    geolocationHash: String(pick(raw, "geolocationHash", 5, "")),
+    biometricHash: String(pick(raw, "biometricHash", 6, "")),
+    status: Number(pick(raw, "status", 7, 0)),
+    approverDids: asStringArray(pick(raw, "approverDids", 8, [])),
+    finalApproverDid: String(pick(raw, "finalApproverDid", 9, "")),
+    createdAt: asBigInt(pick(raw, "createdAt", 10, 0n)),
+    updatedAt: asBigInt(pick(raw, "updatedAt", 11, 0n)),
+    expiresAt: asBigInt(pick(raw, "expiresAt", 12, 0n)),
+  };
+}
+
+export function claimRequestStatusLabel(
+  status: number
+): "pending" | "in_review" | "approved" | "issued" | "rejected" | "expired" {
+  if (status === 1) return "in_review";
+  if (status === 2) return "approved";
+  if (status === 3) return "issued";
+  if (status === 4) return "rejected";
+  if (status === 5) return "expired";
+  return "pending";
+}
+
+// ─── Credential ──────────────────────────────────────────────────────────────
+
+export type SsiCredential = {
+  credentialId: string;
+  claimId: string;
+  requestId: string;
+  citizenDid: string;
+  credentialHash: string;
+  /** 0=ACTIVE 1=REVOKED 2=EXPIRED */
+  status: number;
+  issuedAt: bigint;
+  expiresAt: bigint;
+  revokedAt: bigint;
+  signatures: string[];
+};
+
+export function parseSsiCredential(raw: unknown): SsiCredential {
+  return {
+    credentialId: String(pick(raw, "credentialId", 0, "")),
+    claimId: String(pick(raw, "claimId", 1, "")),
+    requestId: String(pick(raw, "requestId", 2, "")),
+    citizenDid: String(pick(raw, "citizenDid", 3, "")),
+    credentialHash: String(pick(raw, "credentialHash", 4, "")),
+    status: Number(pick(raw, "status", 5, 0)),
+    issuedAt: asBigInt(pick(raw, "issuedAt", 6, 0n)),
+    expiresAt: asBigInt(pick(raw, "expiresAt", 7, 0n)),
+    revokedAt: asBigInt(pick(raw, "revokedAt", 8, 0n)),
+    signatures: asStringArray(pick(raw, "signatures", 9, [])),
+  };
+}
+
+export function credentialStatusLabel(status: number): "active" | "revoked" | "expired" {
+  if (status === 1) return "revoked";
+  if (status === 2) return "expired";
+  return "active";
+}
+
+// ─── VerificationRequest ─────────────────────────────────────────────────────
+
+export type SsiVerificationRequest = {
+  verificationRequestId: string;
+  verifierDid: string;
+  citizenDid: string;
+  requestedClaims: string[];
+  /** 0=REQUESTED 1=APPROVED 2=REJECTED */
+  status: number;
+  createdAt: bigint;
+  expiresAt: bigint;
+};
+
+export function parseSsiVerificationRequest(raw: unknown): SsiVerificationRequest {
+  return {
+    verificationRequestId: String(pick(raw, "verificationRequestId", 0, "")),
+    verifierDid: String(pick(raw, "verifierDid", 1, "")),
+    citizenDid: String(pick(raw, "citizenDid", 2, "")),
+    requestedClaims: asStringArray(pick(raw, "requestedClaims", 3, [])),
+    status: Number(pick(raw, "status", 4, 0)),
+    createdAt: asBigInt(pick(raw, "createdAt", 5, 0n)),
+    expiresAt: asBigInt(pick(raw, "expiresAt", 6, 0n)),
+  };
+}
+
+export function verificationRequestStatusLabel(status: number): "requested" | "approved" | "rejected" {
+  if (status === 1) return "approved";
+  if (status === 2) return "rejected";
+  return "requested";
+}
