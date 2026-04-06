@@ -2,7 +2,6 @@
 pragma solidity ^0.8.19;
 
 contract SSI {
-
     enum Role {
         CITIZEN,
         APPROVER,
@@ -109,7 +108,8 @@ contract SSI {
         uint256 issuedAt;
         uint256 expiresAt;
         uint256 revokedAt;
-        string[] signatures;
+        // string[] signatures;
+        bytes[] signatures;
     }
 
     struct CredentialRevocation {
@@ -150,17 +150,63 @@ contract SSI {
     mapping(string => VerificationRequest) public verificationRequests;
     mapping(string => VerifiablePresentation) public presentations;
 
-    mapping(string => Approval[]) public claimApprovals;
+    // mapping(string => Approval[]) public claimApprovals;
 
     mapping(string => Verification[]) public verifications;
     mapping(string => Credential[]) public citizenCredentials;
 
+    mapping(string => mapping(address => bool)) public hasSigned;
+    mapping(string => bytes[]) public requestSignatures;
+
     function registerUser(User memory user) public {
         users[user.did] = user;
+        userAddressToDId[user.wallet] = user.did;
     }
 
     function getUser(string memory did) public view returns (User memory) {
         return users[did];
+    }
+
+    function getMessageHash(
+        string memory requestId,
+        string memory claimId,
+        string memory citizenDid
+    ) public view returns (bytes32) {
+        return
+            keccak256(
+                abi.encode(
+                    requestId,
+                    claimId,
+                    citizenDid,
+                    address(this),
+                    block.chainid
+                )
+            );
+    }
+
+    function recoverSigner(
+        bytes32 hash,
+        bytes memory signature
+    ) public pure returns (address) {
+        bytes32 ethSignedMessageHash = keccak256(
+            abi.encodePacked("\x19Ethereum Signed Message:\n32", hash)
+        );
+
+        (bytes32 r, bytes32 s, uint8 v) = splitSignature(signature);
+
+        return ecrecover(ethSignedMessageHash, v, r, s);
+    }
+
+    function splitSignature(
+        bytes memory sig
+    ) internal pure returns (bytes32 r, bytes32 s, uint8 v) {
+        require(sig.length == 65, "Invalid signature length");
+
+        assembly {
+            r := mload(add(sig, 32))
+            s := mload(add(sig, 64))
+            v := byte(0, mload(add(sig, 96)))
+        }
     }
 
     function deactivateUser(string memory did) public {
@@ -173,6 +219,7 @@ contract SSI {
     }
 
     function createClaim(Claim memory claim) public {
+        // add some validation such that only governance can call this
         claims[claim.claimId] = claim;
     }
 
@@ -200,6 +247,7 @@ contract SSI {
     }
 
     function createClaimRequest(ClaimRequest memory request) public {
+        // TODO : add validation such that only citizen can raise this request with proper error throw
         claimRequests[request.requestId] = request;
     }
 
@@ -217,54 +265,155 @@ contract SSI {
         claimRequests[requestId].approverDids.push(approverDid);
         claimRequests[requestId].updatedAt = block.timestamp;
 
-        claimApprovals[requestId].push(
-            Approval({
-                approverDid: approverDid,
-                approved: false,
-                approvedAt: 0
-            })
-        );
+        // claimApprovals[requestId].push(
+        //     Approval({approverDid: approverDid, approved: false, approvedAt: 0})
+        // );
     }
 
-    function approveClaimRequest(
+    // function approveClaimRequest(
+    //     string memory requestId,
+    //     string memory approverDid
+    // ) public {
+    //     Approval[] storage approvals = claimApprovals[requestId];
+    //     _setApprovalStatus(approvals, approverDid, true);
+
+    //     ClaimRequest storage req = claimRequests[requestId];
+    //     string[] memory approvedSignatures = _getApprovedSignatures(approvals);
+
+    //     if (
+    //         approvedSignatures.length >=
+    //         claims[req.claimId].numberOfApprovalsNeeded
+    //     ) {
+    //         req.status = ClaimRequestStatus.APPROVED;
+    //         req.finalApproverDid = approverDid;
+    //         _issueCredentialForRequest(req, requestId, approvedSignatures);
+    //         req.status = ClaimRequestStatus.ISSUED;
+    //     }
+    // }
+
+    function submitApproval(
         string memory requestId,
-        string memory approverDid
+        bytes memory signature
     ) public {
-        Approval[] storage approvals = claimApprovals[requestId];
-        _setApprovalStatus(approvals, approverDid, true);
-
         ClaimRequest storage req = claimRequests[requestId];
-        string[] memory approvedSignatures = _getApprovedSignatures(approvals);
+        require(req.status != ClaimRequestStatus.REJECTED, "Already rejected");
+        require(
+            req.status == ClaimRequestStatus.IN_REVIEW,
+            "Not in review state"
+        );
+        require(req.status != ClaimRequestStatus.ISSUED, "Already issued");
 
-        if (
-            approvedSignatures.length >= claims[req.claimId].numberOfApprovalsNeeded
-        ) {
+        require(bytes(req.requestId).length != 0, "Invalid request");
+
+        // Expiry check
+        if (block.timestamp >= req.expiresAt) {
+            req.status = ClaimRequestStatus.EXPIRED;
+            revert("Request expired");
+        }
+
+        // Create message hash
+        bytes32 hash = getMessageHash(requestId, req.claimId, req.citizenDid);
+
+        // Recover signer
+        address signer = recoverSigner(hash, signature);
+        require(msg.sender == signer, "Sender must be signer");
+
+        // Get DID of signer
+        string memory signerDid = userAddressToDId[signer];
+        User memory user = users[signerDid];
+
+        // Validate signer
+        require(user.active, "User inactive");
+        require(user.role == Role.APPROVER, "Not approver");
+
+        // Check if signer is assigned to this request
+        bool isValidApprover = false;
+        for (uint i = 0; i < req.approverDids.length; i++) {
+            if (
+                keccak256(bytes(req.approverDids[i])) ==
+                keccak256(bytes(signerDid))
+            ) {
+                isValidApprover = true;
+                break;
+            }
+        }
+        require(isValidApprover, "Not assigned approver");
+
+        // Prevent duplicate signing
+        require(!hasSigned[requestId][signer], "Already signed");
+
+        // Store signature
+        hasSigned[requestId][signer] = true;
+        requestSignatures[requestId].push(signature);
+
+        req.updatedAt = block.timestamp;
+
+        // Threshold check
+        uint256 required = claims[req.claimId].numberOfApprovalsNeeded;
+
+        if (requestSignatures[requestId].length >= required) {
+            require(
+                req.status == ClaimRequestStatus.IN_REVIEW,
+                "Already processed"
+            );
             req.status = ClaimRequestStatus.APPROVED;
-            req.finalApproverDid = approverDid;
-            _issueCredentialForRequest(req, requestId, approvedSignatures);
+            req.finalApproverDid = signerDid;
+
+            _issueCredentialForRequest(req, requestId);
+
             req.status = ClaimRequestStatus.ISSUED;
         }
     }
 
-    function rejectClaimRequest(
-        string memory requestId,
-        string memory approverDid
-    ) public {
+    // function rejectClaimRequest(
+    //     string memory requestId,
+    //     string memory approverDid
+    // ) public {
+    //     claimRequests[requestId].status = ClaimRequestStatus.REJECTED;
+    //     claimRequests[requestId].finalApproverDid = approverDid;
 
-        claimRequests[requestId].status = ClaimRequestStatus.REJECTED;
-        claimRequests[requestId].finalApproverDid = approverDid;
+    //     // Approval[] storage approvals = claimApprovals[requestId];
+    //     // find an alternative here
 
-        Approval[] storage approvals = claimApprovals[requestId];
+    //     for (uint i = 0; i < approvals.length; i++) {
+    //         if (
+    //             keccak256(bytes(approvals[i].approverDid)) ==
+    //             keccak256(bytes(approverDid))
+    //         ) {
+    //             approvals[i].approved = false;
+    //             approvals[i].approvedAt = block.timestamp;
+    //         }
+    //     }
+    // }
 
-        for (uint i = 0; i < approvals.length; i++) {
+    function rejectClaimRequest(string memory requestId) public {
+        ClaimRequest storage req = claimRequests[requestId];
+
+        require(req.status == ClaimRequestStatus.IN_REVIEW, "Invalid state");
+
+        require(bytes(req.requestId).length != 0, "Invalid request");
+
+        // Only assigned approver can reject
+        string memory signerDid = userAddressToDId[msg.sender];
+        User memory user = users[signerDid];
+
+        require(user.role == Role.APPROVER, "Not approver");
+
+        bool isValidApprover = false;
+        for (uint i = 0; i < req.approverDids.length; i++) {
             if (
-                keccak256(bytes(approvals[i].approverDid)) ==
-                keccak256(bytes(approverDid))
+                keccak256(bytes(req.approverDids[i])) ==
+                keccak256(bytes(signerDid))
             ) {
-                approvals[i].approved = false;
-                approvals[i].approvedAt = block.timestamp;
+                isValidApprover = true;
+                break;
             }
         }
+        require(isValidApprover, "Not assigned approver");
+
+        req.status = ClaimRequestStatus.REJECTED;
+        req.finalApproverDid = signerDid;
+        req.updatedAt = block.timestamp;
     }
 
     function submitVerification(Verification memory verification) public {
@@ -335,56 +484,85 @@ contract SSI {
         return true;
     }
 
-    function getApprovals(
-        string memory requestId
-    ) public view returns (Approval[] memory) {
-        return claimApprovals[requestId];
-    }
+    // function getApprovals(
+    //     string memory requestId
+    // ) public view returns (Approval[] memory) {
+    //     return claimApprovals[requestId];
+    // }
 
-    function _setApprovalStatus(
-        Approval[] storage approvals,
-        string memory approverDid,
-        bool approved
-    ) internal {
-        for (uint256 i = 0; i < approvals.length; i++) {
-            if (
-                keccak256(bytes(approvals[i].approverDid)) ==
-                keccak256(bytes(approverDid))
-            ) {
-                approvals[i].approved = approved;
-                approvals[i].approvedAt = block.timestamp;
-            }
-        }
-    }
+    // function _setApprovalStatus(
+    //     Approval[] storage approvals,
+    //     string memory approverDid,
+    //     bool approved
+    // ) internal {
+    //     for (uint256 i = 0; i < approvals.length; i++) {
+    //         if (
+    //             keccak256(bytes(approvals[i].approverDid)) ==
+    //             keccak256(bytes(approverDid))
+    //         ) {
+    //             approvals[i].approved = approved;
+    //             approvals[i].approvedAt = block.timestamp;
+    //         }
+    //     }
+    // }
 
-    function _getApprovedSignatures(
-        Approval[] storage approvals
-    ) internal view returns (string[] memory approvedSignatures) {
-        uint256 approvedCount = 0;
+    // function _getApprovedSignatures(
+    //     Approval[] storage approvals
+    // ) internal view returns (string[] memory approvedSignatures) {
+    //     uint256 approvedCount = 0;
 
-        for (uint256 i = 0; i < approvals.length; i++) {
-            if (approvals[i].approved) {
-                approvedCount++;
-            }
-        }
+    //     for (uint256 i = 0; i < approvals.length; i++) {
+    //         if (approvals[i].approved) {
+    //             approvedCount++;
+    //         }
+    //     }
 
-        approvedSignatures = new string[](approvedCount);
+    //     approvedSignatures = new string[](approvedCount);
 
-        uint256 signatureIndex = 0;
-        for (uint256 i = 0; i < approvals.length; i++) {
-            if (approvals[i].approved) {
-                approvedSignatures[signatureIndex] = approvals[i].approverDid;
-                signatureIndex++;
-            }
-        }
-    }
+    //     uint256 signatureIndex = 0;
+    //     for (uint256 i = 0; i < approvals.length; i++) {
+    //         if (approvals[i].approved) {
+    //             approvedSignatures[signatureIndex] = approvals[i].approverDid;
+    //             signatureIndex++;
+    //         }
+    //     }
+    // }
+
+    // function _issueCredentialForRequest(
+    //     ClaimRequest storage req,
+    //     string memory requestId,
+    //     string[] memory approvedSignatures
+    // ) internal {
+    //     string memory credentialId = string(
+    //         abi.encodePacked("cred_", requestId)
+    //     );
+
+    //     Credential memory credential = Credential({
+    //         credentialId: credentialId,
+    //         claimId: req.claimId,
+    //         requestId: req.requestId,
+    //         citizenDid: req.citizenDid,
+    //         credentialHash: "",
+    //         status: CredentialStatus.ACTIVE,
+    //         issuedAt: block.timestamp,
+    //         expiresAt: 0,
+    //         revokedAt: 0,
+    //         signatures: approvedSignatures
+    //     });
+
+    //     credentials[credentialId] = credential;
+    //     citizenCredentials[req.citizenDid].push(credential);
+    // }
 
     function _issueCredentialForRequest(
         ClaimRequest storage req,
-        string memory requestId,
-        string[] memory approvedSignatures
+        string memory requestId
     ) internal {
-        string memory credentialId = string(abi.encodePacked("cred_", requestId));
+        string memory credentialId = string(
+            abi.encodePacked("cred_", requestId)
+        );
+
+        bytes[] memory signatures = requestSignatures[requestId];
 
         Credential memory credential = Credential({
             credentialId: credentialId,
@@ -396,7 +574,7 @@ contract SSI {
             issuedAt: block.timestamp,
             expiresAt: 0,
             revokedAt: 0,
-            signatures: approvedSignatures
+            signatures: signatures
         });
 
         credentials[credentialId] = credential;
