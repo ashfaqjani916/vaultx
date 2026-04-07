@@ -2,6 +2,13 @@
 pragma solidity ^0.8.19;
 
 contract SSI {
+
+    address public owner;
+
+    constructor() {
+        owner = msg.sender;
+    }
+
     enum Role {
         CITIZEN,
         APPROVER,
@@ -44,11 +51,26 @@ contract SSI {
         address wallet;
         Role role;
         bool active;
+        bool isApproved;
         uint256 createdAt;
         uint256 updatedAt;
         uint256 revokedAt;
         string createdByDid;
         string revokedByDid;
+    }
+
+    struct UserRequest {
+        string did;
+        string signingPublicKey;
+        string encryptionPublicKey;
+        address wallet;
+        Role role;
+
+        bool processed;
+        bool approved;
+
+        uint256 createdAt;
+        uint256 processedAt;
     }
 
     struct Approval {
@@ -141,6 +163,7 @@ contract SSI {
         uint256 expiresAt;
     }
 
+
     mapping(string => User) public users;
     mapping(address => string) public userAddressToDId;
     mapping(string => Claim) public claims;
@@ -158,9 +181,108 @@ contract SSI {
     mapping(string => mapping(address => bool)) public hasSigned;
     mapping(string => bytes[]) public requestSignatures;
 
-    function registerUser(User memory user) public {
-        users[user.did] = user;
-        userAddressToDId[user.wallet] = user.did;
+    mapping(string => UserRequest) public userRequests;
+
+    modifier onlyGovernance() {
+        // Step 1: allow owner always
+        if (msg.sender == owner) {
+            _;
+            return;
+        }
+
+        string memory did = userAddressToDId[msg.sender];
+        require(users[did].role == Role.GOVERNANCE, "Not governance");
+        _;
+    }
+
+    function registerUser(
+        string memory did,
+        string memory signingPublicKey,
+        string memory encryptionPublicKey,
+        Role role
+    ) public {
+        require(bytes(users[did].did).length == 0, "User already exists");
+
+        if (msg.sender == owner) {
+            users[did] = User({
+                did: did,
+                signingPublicKey: signingPublicKey,
+                encryptionPublicKey: encryptionPublicKey,
+                wallet: msg.sender,
+                role: role,
+                active: true,
+                isApproved: true,
+                createdAt: block.timestamp,
+                updatedAt: block.timestamp,
+                revokedAt: 0,
+                createdByDid: "",
+                revokedByDid: ""
+            });
+
+            userAddressToDId[msg.sender] = did;
+        } else {
+            require(bytes(userRequests[did].did).length == 0, "Request exists");
+            userRequests[did] = UserRequest({
+                did: did,
+                signingPublicKey: signingPublicKey,
+                encryptionPublicKey: encryptionPublicKey,
+                wallet: msg.sender,
+                role: role,
+                processed: false,
+                approved: false,
+                createdAt: block.timestamp,
+                processedAt: 0
+            });
+        }
+    }
+
+    function approveUserRequest(string memory did) public onlyGovernance {
+        UserRequest storage req = userRequests[did];
+
+        require(bytes(req.did).length != 0, "Request not found");
+        require(!req.processed, "Already processed");
+
+        users[did] = User({
+            did: req.did,
+            signingPublicKey: req.signingPublicKey,
+            encryptionPublicKey: req.encryptionPublicKey,
+            wallet: req.wallet,
+            role: req.role,
+            active: true,
+            isApproved : true,
+            createdAt: req.createdAt,
+            updatedAt: block.timestamp,
+            revokedAt: 0,
+            createdByDid: "",
+            revokedByDid: ""
+        });
+
+        userAddressToDId[req.wallet] = req.did;
+
+        req.processed = true;
+        req.approved = true;
+        req.processedAt = block.timestamp;
+    }
+
+    function rejectUser(string memory did) public onlyGovernance {
+        User storage user = users[did];
+
+        require(bytes(user.did).length != 0, "User not found");
+        require(!user.isApproved, "Already approved");
+
+        user.active = false;
+        user.revokedAt = block.timestamp;
+    }
+
+    function rejectUserRequest(string memory did) public onlyGovernance {
+        UserRequest storage req = userRequests[did];
+
+        require(bytes(req.did).length != 0, "Request not found");
+        require(!req.processed, "Already processed");
+
+        req.processed = true;
+        req.approved = false;
+        req.processedAt = block.timestamp;
     }
 
     function getUser(string memory did) public view returns (User memory) {
@@ -218,9 +340,33 @@ contract SSI {
         users[user.did] = user;
     }
 
-    function createClaim(Claim memory claim) public {
-        // add some validation such that only governance can call this
-        claims[claim.claimId] = claim;
+    function createClaim(
+        string memory claimId,
+        string memory claimType,
+        string memory description,
+        bool documentRequired,
+        bool photoRequired,
+        bool geolocationRequired,
+        bool biometricRequired,
+        uint256 numberOfApprovalsNeeded
+    ) public onlyGovernance {
+        require(bytes(claims[claimId].claimId).length == 0, "Claim already exists");
+
+        claims[claimId] = Claim({
+            claimId: claimId,
+            claimType: claimType,
+            description: description,
+            documentRequired: documentRequired,
+            photoRequired: photoRequired,
+            geolocationRequired: geolocationRequired,
+            biometricRequired: biometricRequired,
+            numberOfApprovalsNeeded: numberOfApprovalsNeeded,
+            status: ClaimStatus.PENDING,
+            createdAt: block.timestamp,
+            approvedAt: 0,
+            createdByDid: userAddressToDId[msg.sender],
+            approvedByDid: ""
+        });
     }
 
     function getClaim(
@@ -246,9 +392,43 @@ contract SSI {
         claims[claimId].approvedByDid = governanceDid;
     }
 
-    function createClaimRequest(ClaimRequest memory request) public {
-        // TODO : add validation such that only citizen can raise this request with proper error throw
-        claimRequests[request.requestId] = request;
+    function createClaimRequest(
+        string memory requestId,
+        string memory claimId,
+        string memory citizenDid,
+        string memory documentHash,
+        string memory photoHash,
+        string memory geolocationHash,
+        string memory biometricHash,
+        uint256 expiresAt
+    ) public {
+        require(bytes(claimRequests[requestId].requestId).length == 0, "Request exists");
+        require(bytes(claims[claimId].claimId).length != 0, "Invalid claim");
+
+        string memory senderDid = userAddressToDId[msg.sender];
+        require(
+            keccak256(bytes(senderDid)) == keccak256(bytes(citizenDid)),
+            "Not authorized"
+        );
+
+        User memory user = users[senderDid];
+        require(user.role == Role.CITIZEN, "Only citizen allowed");
+        require(user.active, "User inactive");
+
+        ClaimRequest storage req = claimRequests[requestId];
+
+        req.requestId = requestId;
+        req.claimId = claimId;
+        req.citizenDid = citizenDid;
+        req.documentHash = documentHash;
+        req.photoHash = photoHash;
+        req.geolocationHash = geolocationHash;
+        req.biometricHash = biometricHash;
+        req.status = ClaimRequestStatus.PENDING;
+        req.finalApproverDid = "";
+        req.createdAt = block.timestamp;
+        req.updatedAt = block.timestamp;
+        req.expiresAt = expiresAt;
     }
 
     function getClaimRequest(
@@ -265,31 +445,8 @@ contract SSI {
         claimRequests[requestId].approverDids.push(approverDid);
         claimRequests[requestId].updatedAt = block.timestamp;
 
-        // claimApprovals[requestId].push(
-        //     Approval({approverDid: approverDid, approved: false, approvedAt: 0})
-        // );
     }
 
-    // function approveClaimRequest(
-    //     string memory requestId,
-    //     string memory approverDid
-    // ) public {
-    //     Approval[] storage approvals = claimApprovals[requestId];
-    //     _setApprovalStatus(approvals, approverDid, true);
-
-    //     ClaimRequest storage req = claimRequests[requestId];
-    //     string[] memory approvedSignatures = _getApprovedSignatures(approvals);
-
-    //     if (
-    //         approvedSignatures.length >=
-    //         claims[req.claimId].numberOfApprovalsNeeded
-    //     ) {
-    //         req.status = ClaimRequestStatus.APPROVED;
-    //         req.finalApproverDid = approverDid;
-    //         _issueCredentialForRequest(req, requestId, approvedSignatures);
-    //         req.status = ClaimRequestStatus.ISSUED;
-    //     }
-    // }
 
     function submitApproval(
         string memory requestId,
@@ -365,26 +522,6 @@ contract SSI {
         }
     }
 
-    // function rejectClaimRequest(
-    //     string memory requestId,
-    //     string memory approverDid
-    // ) public {
-    //     claimRequests[requestId].status = ClaimRequestStatus.REJECTED;
-    //     claimRequests[requestId].finalApproverDid = approverDid;
-
-    //     // Approval[] storage approvals = claimApprovals[requestId];
-    //     // find an alternative here
-
-    //     for (uint i = 0; i < approvals.length; i++) {
-    //         if (
-    //             keccak256(bytes(approvals[i].approverDid)) ==
-    //             keccak256(bytes(approverDid))
-    //         ) {
-    //             approvals[i].approved = false;
-    //             approvals[i].approvedAt = block.timestamp;
-    //         }
-    //     }
-    // }
 
     function rejectClaimRequest(string memory requestId) public {
         ClaimRequest storage req = claimRequests[requestId];
@@ -483,76 +620,6 @@ contract SSI {
 
         return true;
     }
-
-    // function getApprovals(
-    //     string memory requestId
-    // ) public view returns (Approval[] memory) {
-    //     return claimApprovals[requestId];
-    // }
-
-    // function _setApprovalStatus(
-    //     Approval[] storage approvals,
-    //     string memory approverDid,
-    //     bool approved
-    // ) internal {
-    //     for (uint256 i = 0; i < approvals.length; i++) {
-    //         if (
-    //             keccak256(bytes(approvals[i].approverDid)) ==
-    //             keccak256(bytes(approverDid))
-    //         ) {
-    //             approvals[i].approved = approved;
-    //             approvals[i].approvedAt = block.timestamp;
-    //         }
-    //     }
-    // }
-
-    // function _getApprovedSignatures(
-    //     Approval[] storage approvals
-    // ) internal view returns (string[] memory approvedSignatures) {
-    //     uint256 approvedCount = 0;
-
-    //     for (uint256 i = 0; i < approvals.length; i++) {
-    //         if (approvals[i].approved) {
-    //             approvedCount++;
-    //         }
-    //     }
-
-    //     approvedSignatures = new string[](approvedCount);
-
-    //     uint256 signatureIndex = 0;
-    //     for (uint256 i = 0; i < approvals.length; i++) {
-    //         if (approvals[i].approved) {
-    //             approvedSignatures[signatureIndex] = approvals[i].approverDid;
-    //             signatureIndex++;
-    //         }
-    //     }
-    // }
-
-    // function _issueCredentialForRequest(
-    //     ClaimRequest storage req,
-    //     string memory requestId,
-    //     string[] memory approvedSignatures
-    // ) internal {
-    //     string memory credentialId = string(
-    //         abi.encodePacked("cred_", requestId)
-    //     );
-
-    //     Credential memory credential = Credential({
-    //         credentialId: credentialId,
-    //         claimId: req.claimId,
-    //         requestId: req.requestId,
-    //         citizenDid: req.citizenDid,
-    //         credentialHash: "",
-    //         status: CredentialStatus.ACTIVE,
-    //         issuedAt: block.timestamp,
-    //         expiresAt: 0,
-    //         revokedAt: 0,
-    //         signatures: approvedSignatures
-    //     });
-
-    //     credentials[credentialId] = credential;
-    //     citizenCredentials[req.citizenDid].push(credential);
-    // }
 
     function _issueCredentialForRequest(
         ClaimRequest storage req,
