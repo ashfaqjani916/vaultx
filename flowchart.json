@@ -1,0 +1,104 @@
+{
+  "type": "excalidraw",
+  "version": 2,
+  "source": "chatgpt",
+  "elements": [
+    {
+      "type": "text",
+      "x": 50,
+      "y": 20,
+      "text": "SSI End-to-End Flow (HLD)",
+      "fontSize": 24
+    },
+
+    // ---------------- ONBOARDING ----------------
+    {
+      "type": "rectangle",
+      "x": 50,
+      "y": 100,
+      "width": 220,
+      "height": 80,
+      "text": "Actor Onboarding\n- Generate Key Pair\n- Create DID\n- Store Public Key on Blockchain\n- Private Key in Wallet"
+    },
+
+    // ---------------- GOVERNANCE ----------------
+    {
+      "type": "rectangle",
+      "x": 350,
+      "y": 80,
+      "width": 240,
+      "height": 100,
+      "text": "Governance\n- Review Claim Templates\n- Approve / Reject\n- Maintain Claim Registry"
+    },
+
+    {
+      "type": "rectangle",
+      "x": 350,
+      "y": 220,
+      "width": 240,
+      "height": 100,
+      "text": "Issuer\n- Create Claim\n- Send to Governance\n- Use Approved Claims"
+    },
+
+    // ---------------- ISSUANCE ----------------
+    {
+      "type": "rectangle",
+      "x": 650,
+      "y": 200,
+      "width": 260,
+      "height": 120,
+      "text": "Credential Issuance\n- Verify Citizen\n- Create Credential Payload\n- Sign (JWS)\n- Encrypt (JWE)\n- Store Hash on Blockchain\n- Send to Citizen"
+    },
+
+    // ---------------- WALLET STORAGE ----------------
+    {
+      "type": "rectangle",
+      "x": 950,
+      "y": 200,
+      "width": 260,
+      "height": 100,
+      "text": "Citizen Wallet\n- Receive Encrypted Credential\n- Store Locally\n- Private Key Controlled Decryption"
+    },
+
+    // ---------------- VERIFICATION REQUEST ----------------
+    {
+      "type": "rectangle",
+      "x": 650,
+      "y": 400,
+      "width": 260,
+      "height": 100,
+      "text": "Verifier\n- Create Verification Request\n- Generate QR Code"
+    },
+
+    // ---------------- SELECTIVE DISCLOSURE ----------------
+    {
+      "type": "rectangle",
+      "x": 950,
+      "y": 380,
+      "width": 260,
+      "height": 140,
+      "text": "Citizen Wallet\n- Scan QR\n- View Requested Claims\n- Select Attributes\n- Optional ZKP\n- Create Proof Payload\n- Sign (JWS)\n- Generate Session"
+    },
+
+    // ---------------- VERIFICATION ----------------
+    {
+      "type": "rectangle",
+      "x": 1250,
+      "y": 400,
+      "width": 260,
+      "height": 140,
+      "text": "Verifier Checks\n- Fetch Proof\n- Resolve DID\n- Verify Signature\n- Check Hash on Blockchain\n- Check Revocation\n- Validate Session"
+    },
+
+    // ---------------- BLOCKCHAIN ----------------
+    {
+      "type": "rectangle",
+      "x": 650,
+      "y": 20,
+      "width": 300,
+      "height": 120,
+      "text": "Blockchain Layer\n- DID + Public Keys\n- Credential Hash\n- Revocation Status\n- Claim Registry"
+    }
+
+  ]
+}
