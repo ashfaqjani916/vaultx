@@ -197,6 +197,8 @@ contract SSI {
     mapping(string => User) public users;
     mapping(address => string) public userAddressToDId;
     mapping(string => Claim) public claims;
+    string[] public allClaimTypes;
+    mapping(string => bool) public claimTypeExists;
     mapping(string => ClaimRequest) public claimRequests;
     mapping(string => Credential) public credentials;
     mapping(string => CredentialRevocation) public credentialRevocations;
@@ -419,6 +421,11 @@ contract SSI {
             "Claim already exists"
         );
 
+        if (!claimTypeExists[claimType]) {
+            allClaimTypes.push(claimType);
+            claimTypeExists[claimType] = true;
+        }
+
         claims[claimId] = Claim({
             claimId: claimId,
             claimType: claimType,
@@ -440,6 +447,10 @@ contract SSI {
         string memory claimId
     ) public view returns (Claim memory) {
         return claims[claimId];
+    }
+
+    function getClaimTypes() public view returns (string[] memory) {
+        return allClaimTypes;
     }
 
     function approveClaim(
