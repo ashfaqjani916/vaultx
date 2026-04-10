@@ -1,4 +1,9 @@
-import { ZERO_ADDRESS, createThirdwebClient, defineChain, getContract } from "thirdweb";
+import {
+  ZERO_ADDRESS,
+  createThirdwebClient,
+  defineChain,
+  getContract,
+} from "thirdweb";
 import type { LoginPayload } from "thirdweb/auth";
 import type { SiweAuthOptions } from "thirdweb/react";
 import { createWallet, inAppWallet } from "thirdweb/wallets";
@@ -9,16 +14,21 @@ const thirdwebAuthMode = import.meta.env.VITE_THIRDWEB_AUTH_MODE || "popup";
 const thirdwebLoginMethods =
   import.meta.env.VITE_THIRDWEB_LOGIN_METHODS || "google,email,passkey";
 const thirdwebExternalWallets =
-  import.meta.env.VITE_THIRDWEB_EXTERNAL_WALLETS || "io.metamask,com.coinbase.wallet";
+  import.meta.env.VITE_THIRDWEB_EXTERNAL_WALLETS ||
+  "io.metamask,com.coinbase.wallet";
 const rawSsiContractAddress = import.meta.env.VITE_SSI_CONTRACT_ADDRESS?.trim();
-const parsedChainId = Number.parseInt(import.meta.env.VITE_SSI_CHAIN_ID || "11155111", 10);
+const rawDeployerAddress = import.meta.env.VITE_DEPLOYER_ADDRESS?.trim();
+const parsedChainId = Number.parseInt(
+  import.meta.env.VITE_SSI_CHAIN_ID || "11155111",
+  10,
+);
 
 const isValidAddress = (value?: string): value is `0x${string}` =>
   Boolean(value && /^0x[a-fA-F0-9]{40}$/.test(value));
 
 if (thirdwebClientId === "REPLACE_WITH_THIRDWEB_CLIENT_ID") {
   console.warn(
-    "Missing VITE_THIRDWEB_CLIENT_ID. Add it in your env file to enable Thirdweb auth."
+    "Missing VITE_THIRDWEB_CLIENT_ID. Add it in your env file to enable Thirdweb auth.",
   );
 }
 
@@ -27,16 +37,27 @@ export const thirdwebClient = createThirdwebClient({
 });
 
 export const ssiChainId =
-  Number.isFinite(parsedChainId) && parsedChainId > 0 ? parsedChainId : 11155111;
+  Number.isFinite(parsedChainId) && parsedChainId > 0
+    ? parsedChainId
+    : 11155111;
 export const ssiChain = defineChain(ssiChainId);
-export const ssiContractAddress: `0x${string}` = isValidAddress(rawSsiContractAddress)
+export const ssiContractAddress: `0x${string}` = isValidAddress(
+  rawSsiContractAddress,
+)
   ? rawSsiContractAddress
   : ZERO_ADDRESS;
 export const isSsiContractConfigured = isValidAddress(rawSsiContractAddress);
 
+// Deployer address — if set, the owner check is instant (no RPC call needed)
+export const ssiDeployerAddress: string = isValidAddress(rawDeployerAddress)
+  ? rawDeployerAddress.toLowerCase()
+  : "";
+export const isSsiDeployerConfigured: boolean =
+  isValidAddress(rawDeployerAddress);
+
 if (!isSsiContractConfigured) {
   console.warn(
-    "Missing or invalid VITE_SSI_CONTRACT_ADDRESS. Contract reads/writes are disabled until it is set."
+    "Missing or invalid VITE_SSI_CONTRACT_ADDRESS. Contract reads/writes are disabled until it is set.",
   );
 }
 
@@ -59,13 +80,17 @@ const parsedExternalWallets = thirdwebExternalWallets
 export const thirdwebWallets = [
   inAppWallet({
     auth: {
-      options: (parsedLoginMethods.length ? parsedLoginMethods : ["google"]) as any,
+      options: (parsedLoginMethods.length
+        ? parsedLoginMethods
+        : ["google"]) as any,
       mode: (["popup", "redirect", "window"].includes(thirdwebAuthMode)
         ? thirdwebAuthMode
         : "popup") as "popup" | "redirect" | "window",
     },
   }),
-  ...parsedExternalWallets.map((walletId) => createWallet(walletId)),
+  ...parsedExternalWallets.map((walletId) =>
+    createWallet(walletId as Parameters<typeof createWallet>[0]),
+  ),
 ];
 
 const authBaseUrl = import.meta.env.VITE_THIRDWEB_AUTH_BASE_URL;
@@ -110,7 +135,10 @@ export const thirdwebAuth: SiweAuthOptions | undefined = authBaseUrl
           credentials: "include",
           body: JSON.stringify({ address }),
         });
-        const json = await readJson<{ loggedIn?: boolean; isLoggedIn?: boolean }>(response);
+        const json = await readJson<{
+          loggedIn?: boolean;
+          isLoggedIn?: boolean;
+        }>(response);
         return Boolean(json.loggedIn ?? json.isLoggedIn);
       },
       doLogout: async () => {

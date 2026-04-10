@@ -7,7 +7,8 @@ import { ThirdwebProvider } from "thirdweb/react";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { ThirdwebWalletSync } from "@/components/ThirdwebWalletSync";
 import { RoleGuard } from "@/components/auth/RoleGuard";
-import Landing from "./pages/Landing";
+import Login from "./pages/Login";
+import Governance from "./pages/Governance";
 import Dashboard from "./pages/Dashboard";
 import IdentityWallet from "./pages/IdentityWallet";
 import ClaimRegistry from "./pages/ClaimRegistry";
@@ -35,7 +36,8 @@ const App = () => (
           }}
         >
           <Routes>
-            <Route path="/" element={<Landing />} />
+            <Route path="/" element={<Login />} />
+            <Route path="/governance" element={<Governance />} />
             <Route element={<AppLayout />}>
               <Route
                 path="/dashboard"

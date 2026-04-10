@@ -1,52 +1,82 @@
-import { useVaultStore } from '@/store/useVaultStore';
-import { Card } from '@/components/ui/card';
-import { Award, Clock, ShieldCheck, FileX, Activity, Users, ArrowUpRight, FileText, ClipboardList, FileSearch, ScrollText } from 'lucide-react';
-import { StatusBadge } from '@/components/StatusBadge';
-import { motion } from 'framer-motion';
-import { useOnchainUser } from '@/hooks/useOnchainUser';
+import { useMemo } from "react";
+import { Card } from "@/components/ui/card";
+import { Award, Clock, ShieldCheck, FileX, Activity, Users, FileText, ClipboardList, FileSearch, ScrollText, Loader2 } from "lucide-react";
+import { StatusBadge } from "@/components/StatusBadge";
+import { motion } from "framer-motion";
+import { useOnchainUser } from "@/hooks/useOnchainUser";
+import { useOnchainCredentials } from "@/hooks/useOnchainCredentials";
+import { useOnchainClaimRequests } from "@/hooks/useOnchainClaimRequests";
+import { useOnchainClaimDefinitions } from "@/hooks/useOnchainClaimDefinitions";
+import { claimRequestStatusLabel, credentialStatusLabel } from "@/lib/ssiParsers";
 
-const cardAnim = (i: number) => ({ initial: { opacity: 0, y: 12 }, animate: { opacity: 1, y: 0 }, transition: { delay: i * 0.08 } });
+const cardAnim = (i: number) => ({
+  initial: { opacity: 0, y: 12 },
+  animate: { opacity: 1, y: 0 },
+  transition: { delay: i * 0.08 },
+});
 
 export default function Dashboard() {
-  const { credentials, claimRequests, activities, verificationRequests, auditLogs } = useVaultStore();
   const { did, role, user } = useOnchainUser();
-  const currentRole = role ?? 'citizen';
+  const currentRole = role ?? "citizen";
 
-  // Role-specific stats
+  const { credentials, isLoading: credsLoading } = useOnchainCredentials(did ?? "");
+  const { requests, isLoading: reqsLoading } = useOnchainClaimRequests();
+  const { definitions } = useOnchainClaimDefinitions();
+
+  // Filter requests by current user's DID
+  const myRequests = useMemo(
+    () => requests.filter((r) => r.citizenDid === did),
+    [requests, did]
+  );
+
+  // All requests (for approver/governance view)
+  const allRequests = requests;
+
+  const activeCredentials = credentials.filter((c) => c.status === 0);
+  const revokedCredentials = credentials.filter((c) => c.status === 1);
+
+  const pendingRequests = myRequests.filter((r) => r.status === 0);
+  const issuedRequests = myRequests.filter((r) => r.status === 3);
+  const rejectedRequests = myRequests.filter((r) => r.status === 4);
+
+  const pendingReviews = allRequests.filter((r) => r.status === 0 || r.status === 1);
+  const approvedRequests = allRequests.filter((r) => r.status === 2);
+  const issuedAll = allRequests.filter((r) => r.status === 3);
+
   const roleStats = {
     citizen: [
-      { label: 'My Credentials', value: credentials.length, icon: Award, color: 'text-primary' },
-      { label: 'Pending Claims', value: claimRequests.filter(r => r.status === 'pending').length, icon: Clock, color: 'text-warning' },
-      { label: 'Issued', value: claimRequests.filter(r => r.status === 'issued').length, icon: ShieldCheck, color: 'text-success' },
-      { label: 'Rejected', value: claimRequests.filter(r => r.status === 'rejected').length, icon: FileX, color: 'text-destructive' },
+      { label: "My Credentials", value: credentials.length, icon: Award, color: "text-primary", loading: credsLoading },
+      { label: "Pending Claims", value: pendingRequests.length, icon: Clock, color: "text-warning", loading: reqsLoading },
+      { label: "Issued", value: issuedRequests.length, icon: ShieldCheck, color: "text-success", loading: reqsLoading },
+      { label: "Rejected", value: rejectedRequests.length, icon: FileX, color: "text-destructive", loading: reqsLoading },
     ],
     approver: [
-      { label: 'Pending Reviews', value: claimRequests.filter(r => r.status === 'pending' || r.status === 'in_review').length, icon: ClipboardList, color: 'text-warning' },
-      { label: 'Approved', value: claimRequests.filter(r => r.status === 'approved').length, icon: ShieldCheck, color: 'text-success' },
-      { label: 'Issued Credentials', value: claimRequests.filter(r => r.status === 'issued').length, icon: Award, color: 'text-primary' },
-      { label: 'Rejected', value: claimRequests.filter(r => r.status === 'rejected').length, icon: FileX, color: 'text-destructive' },
+      { label: "Pending Reviews", value: pendingReviews.length, icon: ClipboardList, color: "text-warning", loading: reqsLoading },
+      { label: "Approved", value: approvedRequests.length, icon: ShieldCheck, color: "text-success", loading: reqsLoading },
+      { label: "Issued Credentials", value: issuedAll.length, icon: Award, color: "text-primary", loading: reqsLoading },
+      { label: "Rejected", value: allRequests.filter((r) => r.status === 4).length, icon: FileX, color: "text-destructive", loading: reqsLoading },
     ],
     verifier: [
-      { label: 'Verification Requests', value: verificationRequests.length, icon: FileSearch, color: 'text-primary' },
-      { label: 'Pending', value: verificationRequests.filter(r => r.status === 'pending').length, icon: Clock, color: 'text-warning' },
-      { label: 'Completed', value: verificationRequests.filter(r => r.status === 'completed').length, icon: ShieldCheck, color: 'text-success' },
-      { label: 'Expired', value: verificationRequests.filter(r => r.status === 'expired').length, icon: FileX, color: 'text-destructive' },
+      { label: "Active Credentials", value: activeCredentials.length, icon: Award, color: "text-primary", loading: credsLoading },
+      { label: "Revoked", value: revokedCredentials.length, icon: FileX, color: "text-destructive", loading: credsLoading },
+      { label: "Pending Claims", value: pendingRequests.length, icon: Clock, color: "text-warning", loading: reqsLoading },
+      { label: "Issued", value: issuedRequests.length, icon: ShieldCheck, color: "text-success", loading: reqsLoading },
     ],
     governance: [
-      { label: 'Claim Definitions', value: useVaultStore.getState().claimDefinitions.length, icon: FileText, color: 'text-primary' },
-      { label: 'Total Requests', value: claimRequests.length, icon: ClipboardList, color: 'text-warning' },
-      { label: 'Audit Entries', value: auditLogs.length, icon: ScrollText, color: 'text-success' },
-      { label: 'Active Credentials', value: credentials.filter(c => c.status === 'active').length, icon: Award, color: 'text-primary' },
+      { label: "Claim Definitions", value: definitions.length, icon: FileText, color: "text-primary", loading: false },
+      { label: "Total Requests", value: allRequests.length, icon: ClipboardList, color: "text-warning", loading: reqsLoading },
+      { label: "Active Credentials", value: activeCredentials.length, icon: Award, color: "text-success", loading: credsLoading },
+      { label: "Pending Reviews", value: pendingReviews.length, icon: ScrollText, color: "text-primary", loading: reqsLoading },
     ],
   };
 
-  const stats = roleStats[currentRole] || roleStats.citizen;
+  const stats = roleStats[currentRole] ?? roleStats.citizen;
 
   const roleDescriptions: Record<string, string> = {
-    citizen: 'Manage your identity, credentials, and claim requests',
-    approver: 'Review, verify, and issue verifiable credentials',
-    verifier: 'Request and verify identity proofs',
-    governance: 'Manage claim definitions and monitor the system',
+    citizen: "Manage your identity, credentials, and claim requests",
+    approver: "Review, verify, and issue verifiable credentials",
+    verifier: "Request and verify identity proofs",
+    governance: "Manage claim definitions and monitor the system",
   };
 
   return (
@@ -65,15 +95,19 @@ export default function Dashboard() {
                 <span className="text-xs text-muted-foreground font-medium">{s.label}</span>
                 <s.icon className={`h-4 w-4 ${s.color}`} />
               </div>
-              <div className="text-3xl font-bold text-card-foreground">{s.value}</div>
+              {s.loading ? (
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              ) : (
+                <div className="text-3xl font-bold text-card-foreground">{s.value}</div>
+              )}
             </Card>
           </motion.div>
         ))}
       </div>
 
       <div className="grid lg:grid-cols-3 gap-6">
-        {/* Identity Status - Citizen, Approver */}
-        {(currentRole === 'citizen' || currentRole === 'approver') && (
+        {/* Identity Status – Citizen, Approver */}
+        {(currentRole === "citizen" || currentRole === "approver") && (
           <motion.div {...cardAnim(4)}>
             <Card className="p-5 shadow-card border-border bg-card">
               <h3 className="font-semibold text-sm mb-4 flex items-center gap-2">
@@ -83,138 +117,185 @@ export default function Dashboard() {
                 <div className="space-y-3">
                   <div className="flex justify-between text-xs">
                     <span className="text-muted-foreground">DID</span>
-                    <span className="font-mono text-card-foreground">{did.slice(0, 20)}...</span>
+                    <span className="font-mono text-card-foreground">{did.slice(0, 22)}…</span>
                   </div>
                   <div className="flex justify-between text-xs">
                     <span className="text-muted-foreground">Status</span>
-                    <StatusBadge status={user?.active ? 'active' : 'deactivated'} />
+                    <StatusBadge status={user?.active ? "active" : "deactivated"} />
                   </div>
                   <div className="flex justify-between text-xs">
                     <span className="text-muted-foreground">Created</span>
                     <span className="text-card-foreground">
-                      {user ? new Date(Number(user.createdAt) * 1000).toLocaleDateString() : '-'}
+                      {user ? new Date(Number(user.createdAt) * 1000).toLocaleDateString() : "—"}
                     </span>
                   </div>
                 </div>
               ) : (
-                <p className="text-xs text-muted-foreground">No DID created yet. Visit Identity Wallet to generate one.</p>
+                <p className="text-xs text-muted-foreground">
+                  No DID registered. Visit{" "}
+                  <a href="/identity" className="underline text-primary">Identity Wallet</a> to get started.
+                </p>
               )}
             </Card>
           </motion.div>
         )}
 
-        {/* Recent Credentials - Citizen, Approver */}
-        {(currentRole === 'citizen' || currentRole === 'approver') && (
+        {/* Recent Credentials – Citizen, Approver */}
+        {(currentRole === "citizen" || currentRole === "approver") && (
           <motion.div {...cardAnim(5)}>
             <Card className="p-5 shadow-card border-border bg-card">
               <h3 className="font-semibold text-sm mb-4 flex items-center gap-2">
                 <Award className="h-4 w-4 text-primary" /> Recent Credentials
               </h3>
-              <div className="space-y-3">
-                {credentials.slice(0, 3).map(c => (
-                  <div key={c.id} className="flex items-center justify-between text-xs">
-                    <div>
-                      <span className="font-medium text-card-foreground">{c.claimType}</span>
-                      <p className="text-muted-foreground">{c.issuerName}</p>
+              {credsLoading ? (
+                <div className="flex justify-center py-4">
+                  <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {credentials.slice(0, 3).map((c) => (
+                    <div key={c.credentialId} className="flex items-center justify-between text-xs">
+                      <div>
+                        <span className="font-medium text-card-foreground">{c.claimId}</span>
+                        <p className="text-muted-foreground font-mono text-xs">
+                          {c.credentialId.slice(0, 18)}…
+                        </p>
+                      </div>
+                      <StatusBadge status={credentialStatusLabel(c.status)} />
                     </div>
-                    <StatusBadge status={c.status} />
-                  </div>
-                ))}
-                {credentials.length === 0 && <p className="text-xs text-muted-foreground">No credentials yet.</p>}
-              </div>
+                  ))}
+                  {credentials.length === 0 && (
+                    <p className="text-xs text-muted-foreground">No credentials yet.</p>
+                  )}
+                </div>
+              )}
             </Card>
           </motion.div>
         )}
 
-        {/* Pending Reviews - Approver */}
-        {currentRole === 'approver' && (
+        {/* Pending Reviews – Approver */}
+        {currentRole === "approver" && (
           <motion.div {...cardAnim(4)} className="lg:col-span-2">
             <Card className="p-5 shadow-card border-border bg-card">
               <h3 className="font-semibold text-sm mb-4 flex items-center gap-2">
                 <ClipboardList className="h-4 w-4 text-primary" /> Pending Reviews
               </h3>
-              <div className="space-y-2">
-                {claimRequests.filter(r => r.status === 'pending' || r.status === 'in_review').map(r => (
-                  <div key={r.id} className="flex items-center justify-between p-3 rounded-lg bg-muted/50 text-xs">
-                    <div>
-                      <span className="font-medium text-card-foreground">{r.citizenName}</span>
-                      <span className="text-muted-foreground ml-2">{r.claimType}</span>
+              {reqsLoading ? (
+                <div className="flex justify-center py-4">
+                  <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {pendingReviews.slice(0, 5).map((r) => (
+                    <div key={r.requestId} className="flex items-center justify-between p-3 rounded-lg bg-muted/50 text-xs">
+                      <div>
+                        <span className="font-mono font-medium text-card-foreground">{r.requestId}</span>
+                        <span className="text-muted-foreground ml-2 truncate">{r.citizenDid.slice(0, 22)}…</span>
+                      </div>
+                      <StatusBadge status={claimRequestStatusLabel(r.status)} />
                     </div>
-                    <StatusBadge status={r.status} />
-                  </div>
-                ))}
-                {claimRequests.filter(r => r.status === 'pending' || r.status === 'in_review').length === 0 && (
-                  <p className="text-xs text-muted-foreground">No pending reviews.</p>
-                )}
-              </div>
+                  ))}
+                  {pendingReviews.length === 0 && (
+                    <p className="text-xs text-muted-foreground">No pending reviews.</p>
+                  )}
+                </div>
+              )}
             </Card>
           </motion.div>
         )}
 
-        {/* Verification Requests - Verifier */}
-        {currentRole === 'verifier' && (
+        {/* Verification Requests – Verifier */}
+        {currentRole === "verifier" && (
           <motion.div {...cardAnim(4)} className="lg:col-span-2">
             <Card className="p-5 shadow-card border-border bg-card">
               <h3 className="font-semibold text-sm mb-4 flex items-center gap-2">
-                <FileSearch className="h-4 w-4 text-primary" /> Recent Verification Requests
+                <FileSearch className="h-4 w-4 text-primary" /> My Credentials
               </h3>
-              <div className="space-y-2">
-                {verificationRequests.slice(0, 5).map(r => (
-                  <div key={r.id} className="flex items-center justify-between p-3 rounded-lg bg-muted/50 text-xs">
-                    <div>
-                      <span className="font-medium text-card-foreground">{r.purpose}</span>
-                      <span className="text-muted-foreground ml-2">{r.requestedClaims.join(', ')}</span>
+              {credsLoading ? (
+                <div className="flex justify-center py-4">
+                  <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {credentials.slice(0, 5).map((c) => (
+                    <div key={c.credentialId} className="flex items-center justify-between p-3 rounded-lg bg-muted/50 text-xs">
+                      <div>
+                        <span className="font-mono font-medium text-card-foreground">{c.claimId}</span>
+                      </div>
+                      <StatusBadge status={credentialStatusLabel(c.status)} />
                     </div>
-                    <StatusBadge status={r.status} />
-                  </div>
-                ))}
-                {verificationRequests.length === 0 && (
-                  <p className="text-xs text-muted-foreground">No verification requests yet.</p>
-                )}
-              </div>
+                  ))}
+                  {credentials.length === 0 && (
+                    <p className="text-xs text-muted-foreground">No credentials yet.</p>
+                  )}
+                </div>
+              )}
             </Card>
           </motion.div>
         )}
 
-        {/* Audit Summary - Governance */}
-        {currentRole === 'governance' && (
+        {/* Governance Overview */}
+        {currentRole === "governance" && (
           <motion.div {...cardAnim(4)} className="lg:col-span-2">
             <Card className="p-5 shadow-card border-border bg-card">
               <h3 className="font-semibold text-sm mb-4 flex items-center gap-2">
-                <ScrollText className="h-4 w-4 text-primary" /> Recent Audit Logs
+                <ScrollText className="h-4 w-4 text-primary" /> Recent Requests
               </h3>
-              <div className="space-y-2">
-                {auditLogs.slice(0, 5).map(log => (
-                  <div key={log.id} className="flex items-center justify-between p-3 rounded-lg bg-muted/50 text-xs">
-                    <div>
-                      <span className="font-medium text-card-foreground">{log.action}</span>
-                      <p className="text-muted-foreground">{log.details}</p>
+              {reqsLoading ? (
+                <div className="flex justify-center py-4">
+                  <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {allRequests.slice(0, 5).map((r) => (
+                    <div key={r.requestId} className="flex items-center justify-between p-3 rounded-lg bg-muted/50 text-xs">
+                      <div>
+                        <span className="font-mono font-medium text-card-foreground">{r.requestId}</span>
+                        <p className="text-muted-foreground truncate">{r.citizenDid.slice(0, 26)}…</p>
+                      </div>
+                      <StatusBadge status={claimRequestStatusLabel(r.status)} />
                     </div>
-                    <span className="text-muted-foreground">{new Date(log.timestamp).toLocaleDateString()}</span>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                  {allRequests.length === 0 && (
+                    <p className="text-xs text-muted-foreground">No requests on-chain yet.</p>
+                  )}
+                </div>
+              )}
             </Card>
           </motion.div>
         )}
 
-        {/* Activity Timeline - All roles */}
+        {/* Activity – All roles */}
         <motion.div {...cardAnim(6)}>
           <Card className="p-5 shadow-card border-border bg-card">
             <h3 className="font-semibold text-sm mb-4 flex items-center gap-2">
-              <Activity className="h-4 w-4 text-primary" /> Activity
+              <Activity className="h-4 w-4 text-primary" /> My Claim Requests
             </h3>
-            <div className="space-y-3">
-              {activities.slice(0, 5).map(a => (
-                <div key={a.id} className="flex items-start gap-2.5 text-xs">
-                  <span className="h-1.5 w-1.5 rounded-full bg-primary mt-1.5 shrink-0" />
-                  <div className="flex-1">
-                    <p className="text-card-foreground">{a.message}</p>
-                    <p className="text-muted-foreground">{a.timestamp}</p>
+            {reqsLoading ? (
+              <div className="flex justify-center py-4">
+                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {myRequests.slice(0, 5).map((r) => (
+                  <div key={r.requestId} className="flex items-start gap-2.5 text-xs">
+                    <span className="h-1.5 w-1.5 rounded-full bg-primary mt-1.5 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-card-foreground font-mono truncate">{r.requestId}</p>
+                      <p className="text-muted-foreground">
+                        {r.createdAt > 0n
+                          ? new Date(Number(r.createdAt) * 1000).toLocaleDateString()
+                          : "—"}
+                      </p>
+                    </div>
+                    <StatusBadge status={claimRequestStatusLabel(r.status)} />
                   </div>
-                </div>
-              ))}
-            </div>
+                ))}
+                {myRequests.length === 0 && (
+                  <p className="text-xs text-muted-foreground">No claim requests submitted.</p>
+                )}
+              </div>
+            )}
           </Card>
         </motion.div>
       </div>
