@@ -58,6 +58,15 @@ contract SSI {
         string revokedByDid;
     }
 
+    struct PublicUser {
+        string did;
+        address wallet;
+        Role role;
+        bool active;
+        bool isApproved;
+        string revokedByDid;
+    }
+
     struct UserRequest {
         string did;
         string signingPublicKey;
@@ -306,8 +315,23 @@ contract SSI {
         req.processedAt = block.timestamp;
     }
 
-    function getUser(string memory did) public view returns (User memory) {
+    function getUserByDID(string memory did) public view returns (User memory) {
         return users[did];
+    }
+
+    function getUser(
+        address userAddress
+    ) public view returns (PublicUser memory) {
+        User storage user = users[userAddressToDId[userAddress]];
+        return
+            PublicUser({
+                did: user.did,
+                wallet: user.wallet,
+                role: user.role,
+                active: user.active,
+                isApproved: user.isApproved,
+                revokedByDid: user.revokedByDid
+            });
     }
 
     function getMessageHash(
