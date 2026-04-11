@@ -9,6 +9,8 @@ import { ThirdwebWalletSync } from "@/components/ThirdwebWalletSync";
 import { RoleGuard } from "@/components/auth/RoleGuard";
 import Login from "./pages/Login";
 import Governance from "./pages/Governance";
+import CitizenDashboard from "./pages/CitizenDashboard";
+import ApproverDashboard from "./pages/ApproverDashboard";
 import Dashboard from "./pages/Dashboard";
 import IdentityWallet from "./pages/IdentityWallet";
 import ClaimRegistry from "./pages/ClaimRegistry";
@@ -38,6 +40,8 @@ const App = () => (
           <Routes>
             <Route path="/" element={<Login />} />
             <Route path="/governance" element={<Governance />} />
+            <Route path="/dashboard/citizen" element={<CitizenDashboard />} />
+            <Route path="/dashboard/approver" element={<ApproverDashboard />} />
             <Route element={<AppLayout />}>
               <Route
                 path="/dashboard"
