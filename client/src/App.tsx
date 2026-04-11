@@ -3,14 +3,15 @@ import { Toaster } from '@/components/ui/toaster'
 import { Toaster as Sonner } from '@/components/ui/sonner'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { BrowserRouter, Routes, Route, useNavigate } from 'react-router-dom'
-import { ThirdwebProvider, useActiveAccount } from 'thirdweb/react'
+import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { ThirdwebProvider } from 'thirdweb/react'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { ThirdwebWalletSync } from '@/components/ThirdwebWalletSync'
 import { RoleGuard } from '@/components/auth/RoleGuard'
 import Login from './pages/Login'
-import RegisterUser from './pages/RegisterUser'
 import Governance from './pages/Governance'
+import CitizenDashboard from './pages/CitizenDashboard'
+import ApproverDashboard from './pages/ApproverDashboard'
 import Dashboard from './pages/Dashboard'
 import IdentityWallet from './pages/IdentityWallet'
 import ClaimRegistry from './pages/ClaimRegistry'
@@ -61,6 +62,8 @@ const App = () => (
             <Route path="/" element={<Login />} />
             <Route path="/register-user" element={<RegisterUser />} />
             <Route path="/governance" element={<Governance />} />
+            <Route path="/dashboard/citizen" element={<CitizenDashboard />} />
+            <Route path="/dashboard/approver" element={<ApproverDashboard />} />
             <Route element={<AppLayout />}>
               <Route
                 path="/dashboard"
