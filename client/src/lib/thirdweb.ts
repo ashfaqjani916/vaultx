@@ -7,6 +7,8 @@ import {
 import type { LoginPayload } from "thirdweb/auth";
 import type { SiweAuthOptions } from "thirdweb/react";
 import { createWallet, inAppWallet } from "thirdweb/wallets";
+import ssiArtifact from "../../../contract/artifacts/contracts/SSI.sol/SSI.json";
+import type { Abi } from "viem";
 
 const thirdwebClientId =
   import.meta.env.VITE_THIRDWEB_CLIENT_ID || "REPLACE_WITH_THIRDWEB_CLIENT_ID";
@@ -65,6 +67,7 @@ export const ssiContract = getContract({
   client: thirdwebClient,
   chain: ssiChain,
   address: ssiContractAddress,
+  abi: ssiArtifact.abi as Abi,
 });
 
 const parsedLoginMethods = thirdwebLoginMethods
@@ -110,43 +113,43 @@ function ensureOk(response: Response) {
 
 export const thirdwebAuth: SiweAuthOptions | undefined = authBaseUrl
   ? {
-      getLoginPayload: async ({ address, chainId }) => {
-        const response = await fetch(`${authBaseUrl}/login-payload`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify({ address, chainId }),
-        });
-        return readJson<LoginPayload>(response);
-      },
-      doLogin: async (params) => {
-        const response = await fetch(`${authBaseUrl}/login`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify(params),
-        });
-        ensureOk(response);
-      },
-      isLoggedIn: async (address) => {
-        const response = await fetch(`${authBaseUrl}/is-logged-in`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify({ address }),
-        });
-        const json = await readJson<{
-          loggedIn?: boolean;
-          isLoggedIn?: boolean;
-        }>(response);
-        return Boolean(json.loggedIn ?? json.isLoggedIn);
-      },
-      doLogout: async () => {
-        const response = await fetch(`${authBaseUrl}/logout`, {
-          method: "POST",
-          credentials: "include",
-        });
-        ensureOk(response);
-      },
-    }
+    getLoginPayload: async ({ address, chainId }) => {
+      const response = await fetch(`${authBaseUrl}/login-payload`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ address, chainId }),
+      });
+      return readJson<LoginPayload>(response);
+    },
+    doLogin: async (params) => {
+      const response = await fetch(`${authBaseUrl}/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify(params),
+      });
+      ensureOk(response);
+    },
+    isLoggedIn: async (address) => {
+      const response = await fetch(`${authBaseUrl}/is-logged-in`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ address }),
+      });
+      const json = await readJson<{
+        loggedIn?: boolean;
+        isLoggedIn?: boolean;
+      }>(response);
+      return Boolean(json.loggedIn ?? json.isLoggedIn);
+    },
+    doLogout: async () => {
+      const response = await fetch(`${authBaseUrl}/logout`, {
+        method: "POST",
+        credentials: "include",
+      });
+      ensureOk(response);
+    },
+  }
   : undefined;

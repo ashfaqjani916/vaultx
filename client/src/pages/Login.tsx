@@ -1,94 +1,107 @@
-import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { useActiveAccount, useConnect, useReadContract } from "thirdweb/react";
-import { createWallet } from "thirdweb/wallets";
-import { motion } from "framer-motion";
-import { Hexagon, Shield, Loader2, Wallet, AlertCircle } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import {
-  thirdwebClient,
-  ssiContract,
-  isSsiContractConfigured,
-  ssiDeployerAddress,
-  isSsiDeployerConfigured,
-} from "@/lib/thirdweb";
+import { useEffect, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { useActiveAccount, useConnect, useReadContract } from 'thirdweb/react'
+import { createWallet } from 'thirdweb/wallets'
+import { motion } from 'framer-motion'
+import { Hexagon, Shield, Loader2, Wallet, AlertCircle } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import { thirdwebClient, ssiChain, ssiContractAddress } from '@/lib/thirdweb'
+import { getContract } from 'thirdweb'
 
 export default function Login() {
-  const navigate = useNavigate();
-  const account = useActiveAccount();
-  const { connect, isConnecting } = useConnect();
-  const [connectError, setConnectError] = useState<string | null>(null);
+  const navigate = useNavigate()
+  const account = useActiveAccount()
+  const { connect, isConnecting } = useConnect()
+  const [connectError, setConnectError] = useState<string | null>(null)
 
-  // Pre-warm: owner() is a pure view call — no wallet needed.
-  // Fires immediately on page load so the result is already cached
-  // by the time the user approves MetaMask, eliminating the serial wait.
-  const { data: ownerAddress, isLoading: ownerLoading } = useReadContract({
-    contract: ssiContract,
-    method: "function owner() view returns (address)",
-    params: [],
+  const contract = getContract({
+    client: thirdwebClient,
+    chain: ssiChain,
+    address: ssiContractAddress,
+  })
+
+  const userAddress = account?.address
+
+  const { data: publicUser, isPending: publicUserPending } = useReadContract({
+    contract,
+    method: 'function getUser(address userAddress) view returns ((string did, address wallet, uint8 role, bool active, bool isApproved, string revokedByDid))',
+    params: [userAddress],
     queryOptions: {
-      enabled: isSsiContractConfigured,
+      enabled: Boolean(userAddress),
     },
-  });
+  })
+
+  const getPublicUserDid = (user: unknown): string => {
+    if (!user || typeof user !== 'object') return ''
+    const record = user as Record<string, unknown>
+    return String(record.did ?? record[0] ?? '')
+  }
+  const getPublicUserRole = (user: unknown): number => {
+    if (!user || typeof user !== 'object') return 0
+    const record = user as Record<string, unknown>
+    return Number(record.role ?? record[2] ?? 0)
+  }
+
+  const redirectByRole = (role: number) => {
+    if (role === 3) {
+      navigate('/dashboard/governance', { replace: true }) // sample: governance route
+      return
+    }
+
+    if (role === 2) {
+      navigate('/dashboard/verifier', { replace: true }) // sample: verifier route placeholder
+      return
+    }
+
+    if (role === 1) {
+      navigate('/dashboard/approver', { replace: true }) // sample: approver route placeholder
+      return
+    }
+
+    navigate('/dashboard/citizen', { replace: true }) // sample: citizen route placeholder
+  }
 
   // Redirect as soon as we know where to send the user
   useEffect(() => {
-    if (!account) return;
+    if (!account) return
+    if (publicUserPending) return
 
-    if (!isSsiContractConfigured) {
-      navigate("/dashboard", { replace: true });
-      return;
+    const did = getPublicUserDid(publicUser)
+    const didExists = did.trim().length > 0
+
+    if (!didExists) {
+      navigate('/register-user', { replace: true }) // sample: missing DID route
+      return
     }
 
-    // Fast path: VITE_DEPLOYER_ADDRESS is set — zero RPC latency
-    if (isSsiDeployerConfigured) {
-      const isOwner = account.address.toLowerCase() === ssiDeployerAddress;
-      navigate(isOwner ? "/governance" : "/dashboard", { replace: true });
-      return;
-    }
-
-    // Fallback: wait for pre-warmed RPC result (likely already resolved)
-    if (ownerLoading || ownerAddress === undefined) return;
-
-    const isOwner =
-      account.address.toLowerCase() === String(ownerAddress).toLowerCase();
-    navigate(isOwner ? "/governance" : "/dashboard", { replace: true });
-  }, [account, ownerAddress, ownerLoading, navigate]);
+    const role = getPublicUserRole(publicUser)
+    redirectByRole(role)
+  }, [account, publicUser, publicUserPending, navigate])
 
   const handleConnect = async () => {
-    setConnectError(null);
+    setConnectError(null)
     try {
       await connect(async () => {
-        const wallet = createWallet("io.metamask");
-        await wallet.connect({ client: thirdwebClient });
-        return wallet;
-      });
+        const wallet = createWallet('io.metamask')
+        await wallet.connect({ client: thirdwebClient })
+        return wallet
+      })
     } catch (err) {
       const msg =
-        err instanceof Error && err.message.toLowerCase().includes("reject")
-          ? "Connection rejected. Please approve in MetaMask."
-          : "Could not connect to MetaMask. Make sure the extension is installed.";
-      setConnectError(msg);
+        err instanceof Error && err.message.toLowerCase().includes('reject')
+          ? 'Connection rejected. Please approve in MetaMask.'
+          : 'Could not connect to MetaMask. Make sure the extension is installed.'
+      setConnectError(msg)
     }
-  };
+  }
 
-  // Show spinner only when: wallet connected + no env fast-path + RPC still pending
-  const isCheckingOwner =
-    Boolean(account) &&
-    isSsiContractConfigured &&
-    !isSsiDeployerConfigured &&
-    (ownerLoading || ownerAddress === undefined);
+  const isCheckingUser = Boolean(account) && publicUserPending
 
   return (
     <div className="min-h-screen bg-background flex flex-col items-center justify-center p-4">
       {/* Brand */}
-      <motion.div
-        initial={{ opacity: 0, y: -12 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.4 }}
-        className="flex items-center gap-2.5 mb-8"
-      >
+      <motion.div initial={{ opacity: 0, y: -12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }} className="flex items-center gap-2.5 mb-8">
         <div className="h-10 w-10 rounded-xl gradient-primary flex items-center justify-center shadow-elevated">
           <Hexagon className="h-5 w-5 text-primary-foreground" />
         </div>
@@ -96,12 +109,7 @@ export default function Login() {
       </motion.div>
 
       {/* Login card */}
-      <motion.div
-        initial={{ opacity: 0, y: 16 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.4, delay: 0.1 }}
-        className="w-full max-w-sm"
-      >
+      <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: 0.1 }} className="w-full max-w-sm">
         <Card className="p-8 shadow-elevated border-border bg-card space-y-6">
           {/* Animated shield icon */}
           <div className="flex justify-center">
@@ -111,7 +119,7 @@ export default function Login() {
                 transition={{
                   duration: 2.4,
                   repeat: Infinity,
-                  ease: "easeInOut",
+                  ease: 'easeInOut',
                 }}
                 className="absolute inset-0 rounded-full gradient-primary opacity-20"
               />
@@ -123,29 +131,19 @@ export default function Login() {
 
           {/* Heading */}
           <div className="text-center">
-            <h1 className="text-xl font-bold tracking-tight">
-              Welcome to VaultX
-            </h1>
-            <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed">
-              Connect your MetaMask wallet to access your identity dashboard
-            </p>
+            <h1 className="text-xl font-bold tracking-tight">Welcome to VaultX</h1>
+            <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed">Connect your MetaMask wallet to access your identity dashboard</p>
           </div>
 
           {/* Action area */}
-          {isCheckingOwner ? (
+          {isCheckingUser ? (
             <div className="flex flex-col items-center gap-3 py-2">
               <Loader2 className="h-6 w-6 animate-spin text-primary" />
-              <p className="text-sm text-muted-foreground">
-                Checking access level…
-              </p>
+              <p className="text-sm text-muted-foreground">Checking user profile...</p>
             </div>
           ) : (
             <div className="space-y-3">
-              <Button
-                onClick={handleConnect}
-                disabled={isConnecting}
-                className="w-full gradient-primary text-primary-foreground font-semibold h-11"
-              >
+              <Button onClick={handleConnect} disabled={isConnecting} className="w-full gradient-primary text-primary-foreground font-semibold h-11">
                 {isConnecting ? (
                   <>
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
@@ -174,18 +172,13 @@ export default function Login() {
 
           {/* Footer */}
           <p className="text-xs text-muted-foreground text-center">
-            MetaMask browser extension required.{" "}
-            <a
-              href="https://metamask.io/download"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline hover:text-foreground transition-colors"
-            >
+            MetaMask browser extension required.{' '}
+            <a href="https://metamask.io/download" target="_blank" rel="noopener noreferrer" className="underline hover:text-foreground transition-colors">
               Get MetaMask
             </a>
           </p>
         </Card>
       </motion.div>
     </div>
-  );
+  )
 }

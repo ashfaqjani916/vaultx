@@ -235,61 +235,47 @@ contract SSI {
     ) public {
         require(bytes(users[did].did).length == 0, "User already exists");
 
-        if (msg.sender == owner) {
-            users[did] = User({
-                did: did,
-                signingPublicKey: signingPublicKey,
-                encryptionPublicKey: encryptionPublicKey,
-                wallet: msg.sender,
-                role: role,
-                active: true,
-                isApproved: true,
-                createdAt: block.timestamp,
-                updatedAt: block.timestamp,
-                revokedAt: 0,
-                createdByDid: "",
-                revokedByDid: ""
-            });
-
-            userAddressToDId[msg.sender] = did;
-        } else {
-            require(bytes(userRequests[did].did).length == 0, "Request exists");
-            userRequests[did] = UserRequest({
-                did: did,
-                signingPublicKey: signingPublicKey,
-                encryptionPublicKey: encryptionPublicKey,
-                wallet: msg.sender,
-                role: role,
-                processed: false,
-                approved: false,
-                createdAt: block.timestamp,
-                processedAt: 0
-            });
-        }
-    }
-
-    function approveUserRequest(string memory did) public onlyGovernance {
-        UserRequest storage req = userRequests[did];
-
-        require(bytes(req.did).length != 0, "Request not found");
-        require(!req.processed, "Already processed");
-
         users[did] = User({
-            did: req.did,
-            signingPublicKey: req.signingPublicKey,
-            encryptionPublicKey: req.encryptionPublicKey,
-            wallet: req.wallet,
-            role: req.role,
+            did: did,
+            signingPublicKey: signingPublicKey,
+            encryptionPublicKey: encryptionPublicKey,
+            wallet: msg.sender,
+            role: role,
             active: true,
-            isApproved: true,
-            createdAt: req.createdAt,
+            isApproved: msg.sender == owner,
+            createdAt: block.timestamp,
             updatedAt: block.timestamp,
             revokedAt: 0,
             createdByDid: "",
             revokedByDid: ""
         });
 
-        userAddressToDId[req.wallet] = req.did;
+        userAddressToDId[msg.sender] = did;
+
+        require(bytes(userRequests[did].did).length == 0, "Request exists");
+        userRequests[did] = UserRequest({
+            did: did,
+            signingPublicKey: signingPublicKey,
+            encryptionPublicKey: encryptionPublicKey,
+            wallet: msg.sender,
+            role: role,
+            processed: false,
+            approved: false,
+            createdAt: block.timestamp,
+            processedAt: 0
+        });
+    }
+
+    function approveUserRequest(string memory did) public onlyGovernance {
+        UserRequest storage req = userRequests[did];
+        User storage user = users[did];
+
+        require(bytes(req.did).length != 0, "Request not found");
+        require(!req.processed, "Already processed");
+        require(bytes(user.did).length != 0, "User not found");
+
+        user.isApproved = true;
+        user.updatedAt = block.timestamp;
 
         req.processed = true;
         req.approved = true;
