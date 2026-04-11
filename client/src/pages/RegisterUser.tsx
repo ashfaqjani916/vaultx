@@ -1,7 +1,7 @@
 import { FormEvent, useMemo, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { AlertCircle, CheckCircle2, Hexagon, Loader2, RefreshCcw, Shield, Wallet } from 'lucide-react'
+import { AlertCircle, CheckCircle2, Copy, Download, Hexagon, Loader2, RefreshCcw, Shield, Wallet } from 'lucide-react'
 import { useActiveAccount, useConnect, useSendAndConfirmTransaction } from 'thirdweb/react'
 import { createWallet } from 'thirdweb/wallets'
 import { Button } from '@/components/ui/button'
@@ -9,7 +9,6 @@ import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Textarea } from '@/components/ui/textarea'
 import { userRoleToRoleIndex, type OnchainUserRole } from '@/lib/ssiParsers'
 import { ssiChain, ssiContractAddress, thirdwebClient } from '@/lib/thirdweb'
 import { getContract, prepareContractCall } from 'thirdweb'
@@ -17,21 +16,17 @@ import { getContract, prepareContractCall } from 'thirdweb'
 type RegisterPayload = {
   did: string
   signingPublicKey: string
+  signingPrivateKey: string
   encryptionPublicKey: string
+  encryptionPrivateKey: string
   role: number
 }
 
 type FormState = {
-  fullName: string
-  email: string
-  note: string
   role: OnchainUserRole
 }
 
 const DEFAULT_FORM: FormState = {
-  fullName: '',
-  email: '',
-  note: '',
   role: 'citizen',
 }
 
@@ -51,7 +46,9 @@ const generateClientIdentity = (): Omit<RegisterPayload, 'role'> => {
   return {
     did: `did:ssi:${didSuffix}`,
     signingPublicKey: `0x${randomHex(33)}`,
+    signingPrivateKey: `0x${randomHex(32)}`,
     encryptionPublicKey: `0x${randomHex(33)}`,
+    encryptionPrivateKey: `0x${randomHex(32)}`,
   }
 }
 
@@ -65,16 +62,57 @@ export default function RegisterUser() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
+  const [copyMessage, setCopyMessage] = useState<string | null>(null)
 
   const payload = useMemo<RegisterPayload>(
     () => ({
       did: identity.did,
       signingPublicKey: identity.signingPublicKey,
+      signingPrivateKey: identity.signingPrivateKey,
       encryptionPublicKey: identity.encryptionPublicKey,
+      encryptionPrivateKey: identity.encryptionPrivateKey,
       role: userRoleToRoleIndex(form.role),
     }),
     [identity, form.role],
   )
+
+  const copyIdentity = async () => {
+    setCopyMessage(null)
+    try {
+      await navigator.clipboard.writeText(
+        [
+          `did,${payload.did}`,
+          `signingPublicKey,${payload.signingPublicKey}`,
+          `signingPrivateKey,${payload.signingPrivateKey}`,
+          `encryptionPublicKey,${payload.encryptionPublicKey}`,
+          `encryptionPrivateKey,${payload.encryptionPrivateKey}`,
+          `role,${payload.role}`,
+        ].join('\n'),
+      )
+      setCopyMessage('Generated identity copied to clipboard.')
+    } catch {
+      setCopyMessage('Unable to copy generated identity.')
+    }
+  }
+
+  const downloadIdentityCsv = () => {
+    const csvLines = [
+      'field,value',
+      `did,${payload.did}`,
+      `signingPublicKey,${payload.signingPublicKey}`,
+      `signingPrivateKey,${payload.signingPrivateKey}`,
+      `encryptionPublicKey,${payload.encryptionPublicKey}`,
+      `encryptionPrivateKey,${payload.encryptionPrivateKey}`,
+      `role,${payload.role}`,
+    ]
+    const blob = new Blob([csvLines.join('\n')], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${payload.did}.csv`
+    link.click()
+    URL.revokeObjectURL(url)
+  }
 
   const handleConnect = async () => {
     setError(null)
@@ -108,11 +146,6 @@ export default function RegisterUser() {
 
     if (!account?.address) {
       setError('Connect your wallet before submitting registration.')
-      return
-    }
-
-    if (!form.fullName.trim() || !form.email.trim()) {
-      setError('Please enter your full name and email.')
       return
     }
 
@@ -161,17 +194,6 @@ export default function RegisterUser() {
           </div>
 
           <form className="space-y-4" onSubmit={handleSubmit}>
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label htmlFor="fullName">Full Name</Label>
-                <Input id="fullName" placeholder="Jane Citizen" value={form.fullName} onChange={(event) => setForm((prev) => ({ ...prev, fullName: event.target.value }))} />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="email">Email</Label>
-                <Input id="email" type="email" placeholder="jane@example.com" value={form.email} onChange={(event) => setForm((prev) => ({ ...prev, email: event.target.value }))} />
-              </div>
-            </div>
-
             <div className="space-y-1.5">
               <Label htmlFor="role">Role</Label>
               <Select value={form.role} onValueChange={(value) => setForm((prev) => ({ ...prev, role: value as OnchainUserRole }))}>
@@ -187,29 +209,31 @@ export default function RegisterUser() {
               </Select>
             </div>
 
-            <div className="space-y-1.5">
-              <Label htmlFor="note">Notes (optional)</Label>
-              <Textarea
-                id="note"
-                placeholder="Any context you want to send with registration"
-                value={form.note}
-                onChange={(event) => setForm((prev) => ({ ...prev, note: event.target.value }))}
-                className="min-h-[84px]"
-              />
-            </div>
-
             <div className="rounded-lg border border-border bg-muted/30 p-3 space-y-2">
               <div className="flex items-center justify-between gap-2">
                 <p className="text-sm font-medium">Client-generated identity payload</p>
-                <Button type="button" variant="outline" size="sm" onClick={() => setIdentity(generateClientIdentity())}>
-                  <RefreshCcw className="h-3.5 w-3.5 mr-1.5" />
-                  Regenerate
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button type="button" variant="outline" size="sm" onClick={copyIdentity}>
+                    <Copy className="h-3.5 w-3.5 mr-1.5" />
+                    Copy
+                  </Button>
+                  <Button type="button" variant="outline" size="sm" onClick={downloadIdentityCsv}>
+                    <Download className="h-3.5 w-3.5 mr-1.5" />
+                    CSV
+                  </Button>
+                  <Button type="button" variant="outline" size="sm" onClick={() => setIdentity(generateClientIdentity())}>
+                    <RefreshCcw className="h-3.5 w-3.5 mr-1.5" />
+                    Regenerate
+                  </Button>
+                </div>
               </div>
               <p className="text-xs text-muted-foreground break-all">did: {payload.did}</p>
               <p className="text-xs text-muted-foreground break-all">signingPublicKey: {payload.signingPublicKey}</p>
+              <p className="text-xs text-muted-foreground break-all">signingPrivateKey: {payload.signingPrivateKey}</p>
               <p className="text-xs text-muted-foreground break-all">encryptionPublicKey: {payload.encryptionPublicKey}</p>
+              <p className="text-xs text-muted-foreground break-all">encryptionPrivateKey: {payload.encryptionPrivateKey}</p>
               <p className="text-xs text-muted-foreground">role enum value: {payload.role}</p>
+              {copyMessage && <p className="text-xs text-muted-foreground">{copyMessage}</p>}
             </div>
 
             {!account ? (
