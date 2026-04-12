@@ -2,18 +2,23 @@ package handler
 
 import (
 	"github.com/gin-gonic/gin"
+	"go.mongodb.org/mongo-driver/mongo"
 
 	"ssi_api/internal/config"
 )
 
 // Handler holds application dependencies.
 type Handler struct {
-	cfg *config.Config
+	cfg             *config.Config
+	vaultCollection *mongo.Collection
 }
 
 // New creates a new Handler.
-func New(cfg *config.Config) *Handler {
-	return &Handler{cfg: cfg}
+func New(cfg *config.Config, vaultCollection *mongo.Collection) *Handler {
+	return &Handler{
+		cfg:             cfg,
+		vaultCollection: vaultCollection,
+	}
 }
 
 // healthResponse is the health check response body.
@@ -37,4 +42,3 @@ func (h *Handler) Health(c *gin.Context) {
 		Env:    h.cfg.App.Env,
 	})
 }
-

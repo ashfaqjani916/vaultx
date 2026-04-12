@@ -29,3 +29,131 @@ paths:
                   env:
                     type: string
                     example: development
+  /keys:
+    post:
+      summary: Store encrypted private key
+      description: Stores the public key and encrypted private key in the database as `password_hash`.
+      tags:
+        - Vault
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StoreKeyRequest"
+      responses:
+        "201":
+          description: Key created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StoreKeyResponse"
+        "200":
+          description: Existing key updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StoreKeyResponse"
+        "400":
+          description: Invalid payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    get:
+      summary: Retrieve decrypted private key
+      description: Returns the decrypted private key for a matching public key and password.
+      tags:
+        - Vault
+      parameters:
+        - name: public_key
+          in: query
+          required: true
+          schema:
+            type: string
+          example: "0xabc123..."
+        - name: password
+          in: query
+          required: true
+          schema:
+            type: string
+          example: "myStrongPassword"
+      responses:
+        "200":
+          description: Private key decrypted successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetPrivateKeyResponse"
+        "400":
+          description: Missing query params
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Invalid password
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Public key not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+components:
+  schemas:
+    StoreKeyRequest:
+      type: object
+      required:
+        - public_key
+        - private_key
+        - password
+      properties:
+        public_key:
+          type: string
+          example: "0xabc123..."
+        private_key:
+          type: string
+          example: "0xprivatekey..."
+        password:
+          type: string
+          example: "myStrongPassword"
+    StoreKeyResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          example: key created
+        public_key:
+          type: string
+          example: "0xabc123..."
+    GetPrivateKeyResponse:
+      type: object
+      properties:
+        public_key:
+          type: string
+          example: "0xabc123..."
+        private_key:
+          type: string
+          example: "0xprivatekey..."
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          example: invalid password

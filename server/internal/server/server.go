@@ -11,34 +11,38 @@ import (
 
 	"ssi_api/internal/config"
 	"ssi_api/internal/handler"
+	"ssi_api/pkg/db"
 )
 
 // Server holds the HTTP server and dependencies.
 type Server struct {
-	cfg    *config.Config
-	logger *slog.Logger
-	router *gin.Engine
+	cfg      *config.Config
+	logger   *slog.Logger
+	router   *gin.Engine
+	database *db.DB
 }
 
 // New creates a new Server.
-func New(cfg *config.Config, logger *slog.Logger) *Server {
+func New(cfg *config.Config, logger *slog.Logger, database *db.DB) *Server {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery())
 	router.Use(slogMiddleware(logger))
 
-	s := &Server{cfg: cfg, logger: logger, router: router}
+	s := &Server{cfg: cfg, logger: logger, router: router, database: database}
 	s.registerRoutes()
 	return s
 }
 
 func (s *Server) registerRoutes() {
-	h := handler.New(s.cfg)
+	vaultCollection := s.database.Collection(s.cfg.Database.Name, s.cfg.Database.Collection)
+	h := handler.New(s.cfg, vaultCollection)
 
 	s.router.GET("/health", h.Health)
 
 	v1 := s.router.Group("/api/v1")
-	_ = v1 // add your routes here
+	v1.POST("/keys", h.StoreKey)
+	v1.GET("/keys", h.GetPrivateKey)
 }
 
 // Start starts the HTTP server and blocks until ctx is cancelled.

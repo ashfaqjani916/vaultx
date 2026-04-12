@@ -8,7 +8,7 @@ import (
 
 // Config holds all application configuration.
 type Config struct {
-	App   AppConfig
+	App      AppConfig
 	Database DatabaseConfig
 }
 
@@ -21,7 +21,9 @@ type AppConfig struct {
 
 // DatabaseConfig holds database connection configuration.
 type DatabaseConfig struct {
-	URL string
+	URL        string
+	Name       string
+	Collection string
 }
 
 // Load reads configuration from environment variables.
@@ -43,9 +45,10 @@ func Load() (*Config, error) {
 		},
 
 		Database: DatabaseConfig{
-			URL: getEnv("DATABASE_URL", ""),
+			URL:        getFirstEnv([]string{"DATABASE_URL", "MONGO_URI"}, ""),
+			Name:       getFirstEnv([]string{"DATABASE_NAME", "MONGO_DB_NAME"}, "ssi"),
+			Collection: getFirstEnv([]string{"DATABASE_COLLECTION", "MONGO_COLLECTION"}, "vault_keys"),
 		},
-
 	}
 
 	if err := cfg.validate(); err != nil {
@@ -53,6 +56,15 @@ func Load() (*Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func getFirstEnv(keys []string, defaultVal string) string {
+	for _, key := range keys {
+		if v := os.Getenv(key); v != "" {
+			return v
+		}
+	}
+	return defaultVal
 }
 
 func getEnv(key, defaultVal string) string {
@@ -65,6 +77,15 @@ func getEnv(key, defaultVal string) string {
 func (c *Config) validate() error {
 	if c.App.Port < 1 || c.App.Port > 65535 {
 		return fmt.Errorf("invalid port: %d (must be 1-65535)", c.App.Port)
+	}
+	if c.Database.URL == "" {
+		return fmt.Errorf("missing database URL: set DATABASE_URL or MONGO_URI")
+	}
+	if c.Database.Name == "" {
+		return fmt.Errorf("missing database name: set DATABASE_NAME or MONGO_DB_NAME")
+	}
+	if c.Database.Collection == "" {
+		return fmt.Errorf("missing database collection: set DATABASE_COLLECTION or MONGO_COLLECTION")
 	}
 	return nil
 }

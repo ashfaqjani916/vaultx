@@ -11,9 +11,11 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"ssi_api/internal/config"
 	"ssi_api/internal/server"
+	"ssi_api/pkg/db"
 )
 
 func main() {
@@ -34,8 +36,25 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// Connect to MongoDB
+	dbCtx, dbCancel := context.WithTimeout(ctx, 10*time.Second)
+	database, err := db.New(dbCtx, cfg.Database.URL)
+	dbCancel()
+	if err != nil {
+		slog.Error("failed to connect to database", "error", err)
+		os.Exit(1)
+	}
+	defer func() {
+		closeCtx, closeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer closeCancel()
+
+		if err := database.Close(closeCtx); err != nil {
+			slog.Error("failed to close database connection", "error", err)
+		}
+	}()
+
 	// Create and start server
-	srv := server.New(cfg, logger)
+	srv := server.New(cfg, logger, database)
 	if err := srv.Start(ctx); err != nil {
 		slog.Error("server error", "error", err)
 		os.Exit(1)
