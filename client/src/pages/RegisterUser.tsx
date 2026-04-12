@@ -159,7 +159,14 @@ export default function RegisterUser() {
 
       await sendAndConfirmTransactionAsync(transaction)
 
-      navigate('/', { replace: true })
+      // Redirect to appropriate dashboard based on selected role
+      const roleRoutes: Record<OnchainUserRole, string> = {
+        governance: '/governance',
+        approver: '/dashboard/approver',
+        verifier: '/dashboard',
+        citizen: '/dashboard/citizen',
+      }
+      navigate(roleRoutes[form.role], { replace: true })
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unable to submit registration right now. Please try again.'
       setError(message)

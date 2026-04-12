@@ -215,6 +215,12 @@ contract SSI {
 
     mapping(string => UserRequest) public userRequests;
 
+    // Track all approver addresses for governance to query
+    address[] public approverAddresses;
+
+    // Track all claim request IDs
+    string[] public allRequestIds;
+
     modifier onlyGovernance() {
         // Step 1: allow owner always
         if (msg.sender == owner) {
@@ -251,6 +257,11 @@ contract SSI {
         });
 
         userAddressToDId[msg.sender] = did;
+
+        // Track approver addresses for governance queries
+        if (role == Role.APPROVER) {
+            approverAddresses.push(msg.sender);
+        }
 
         require(bytes(userRequests[did].did).length == 0, "Request exists");
         userRequests[did] = UserRequest({
@@ -496,6 +507,8 @@ contract SSI {
         req.createdAt = block.timestamp;
         req.updatedAt = block.timestamp;
         req.expiresAt = expiresAt;
+
+        allRequestIds.push(requestId);
     }
 
     function getClaimRequest(
@@ -772,6 +785,54 @@ contract SSI {
 
         return true;
     }
+
+    // ── Governance helpers ─────────────────────────────────────────────────
+
+    function getApproverAddresses()
+        public
+        view
+        returns (address[] memory)
+    {
+        return approverAddresses;
+    }
+
+    function getAllRequestIds()
+        public
+        view
+        returns (string[] memory)
+    {
+        return allRequestIds;
+    }
+
+    function assignApproversToRequest(
+        string memory requestId,
+        string[] memory _approverDids
+    ) public onlyGovernance {
+        ClaimRequest storage req = claimRequests[requestId];
+        require(bytes(req.requestId).length != 0, "Invalid request");
+        require(
+            req.status == ClaimRequestStatus.PENDING,
+            "Request not pending"
+        );
+        require(_approverDids.length > 0, "No approvers");
+
+        for (uint i = 0; i < _approverDids.length; i++) {
+            require(
+                bytes(users[_approverDids[i]].did).length != 0,
+                "Approver not registered"
+            );
+            require(
+                users[_approverDids[i]].role == Role.APPROVER,
+                "Not an approver"
+            );
+            req.approverDids.push(_approverDids[i]);
+        }
+
+        req.status = ClaimRequestStatus.IN_REVIEW;
+        req.updatedAt = block.timestamp;
+    }
+
+    // ── Internal helpers ─────────────────────────────────────────────────
 
     function _issueCredentialForRequest(
         ClaimRequest storage req,

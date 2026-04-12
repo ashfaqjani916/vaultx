@@ -45,21 +45,21 @@ export default function Login() {
 
   const redirectByRole = (role: number) => {
     if (role === 3) {
-      navigate('/dashboard/governance', { replace: true }) // sample: governance route
+      navigate('/governance', { replace: true })
       return
     }
 
     if (role === 2) {
-      navigate('/dashboard/verifier', { replace: true }) // sample: verifier route placeholder
+      navigate('/dashboard', { replace: true })
       return
     }
 
     if (role === 1) {
-      navigate('/dashboard/approver', { replace: true }) // sample: approver route placeholder
+      navigate('/dashboard/approver', { replace: true })
       return
     }
 
-    navigate('/dashboard/citizen', { replace: true }) // sample: citizen route placeholder
+    navigate('/dashboard/citizen', { replace: true })
   }
 
   // Redirect as soon as we know where to send the user
