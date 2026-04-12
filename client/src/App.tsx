@@ -12,6 +12,7 @@ import Login from './pages/Login'
 import Governance from './pages/Governance'
 import CitizenDashboard from './pages/CitizenDashboard'
 import ApproverDashboard from './pages/ApproverDashboard'
+import VerifyerDashboard from './pages/VerifyerDashboard'
 import Dashboard from './pages/Dashboard'
 import ClaimRegistry from './pages/ClaimRegistry'
 import ClaimRequests from './pages/ClaimRequests'
@@ -64,6 +65,7 @@ const App = () => (
             <Route path="/governance" element={<Governance />} />
             <Route path="/dashboard/citizen" element={<CitizenDashboard />} />
             <Route path="/dashboard/approver" element={<ApproverDashboard />} />
+            <Route path="/dashboard/verifyer" element={<VerifyerDashboard />} />
             <Route element={<AppLayout />}>
               <Route
                 path="/dashboard"
