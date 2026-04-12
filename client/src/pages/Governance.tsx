@@ -23,12 +23,16 @@ import {
   AlertTriangle,
   Inbox,
   Send,
+  UserPlus,
+  Users,
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { StatusBadge } from "@/components/StatusBadge";
 import {
   Table,
@@ -43,6 +47,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -55,12 +60,14 @@ import {
 import { ssiMethods } from "@/lib/ssiMethods";
 import {
   parseSsiClaim,
+  parseSsiUser,
   claimStatusLabel,
   parseSsiClaimRequest,
   claimRequestStatusLabel,
   type SsiClaimRequest,
 } from "@/lib/ssiParsers";
 import { useSSIWrite } from "@/hooks/useSSIContract";
+import { useOnchainUser } from "@/hooks/useOnchainUser";
 import { toast } from "@/hooks/use-toast";
 import { readStoredRequestIds } from "@/hooks/useOnchainClaimRequests";
 
@@ -88,7 +95,7 @@ function writeStoredClaimIds(ids: string[]) {
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 function shortAddress(addr: string) {
-  return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
+  return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -105,6 +112,12 @@ type ClaimRow = {
   approvedByDid: string;
   status: number;
   statusLabel: "active" | "pending" | "rejected" | "deprecated";
+};
+
+type ApproverInfo = {
+  address: string;
+  did: string;
+  active: boolean;
 };
 
 const defaultForm = {
@@ -125,8 +138,9 @@ export default function Governance() {
   const { disconnect } = useDisconnect();
   const queryClient = useQueryClient();
   const { writeByName, isPending } = useSSIWrite();
+  const { role: userRole, isLoading: userLoading } = useOnchainUser();
 
-  // ── Owner guard ─────────────────────────────────────────────────────────
+  // ── Access guard — allow contract owner OR governance-role users ─────────
   const { data: ownerAddress, isLoading: ownerLoading } = useReadContract({
     contract: ssiContract,
     method: "function owner() view returns (address)",
@@ -139,21 +153,80 @@ export default function Governance() {
       navigate("/", { replace: true });
       return;
     }
-    // Fast path — env var set, no RPC needed
-    if (isSsiDeployerConfigured) {
-      const isOwner = account.address.toLowerCase() === ssiDeployerAddress;
-      if (!isOwner) navigate("/dashboard", { replace: true });
-      return;
-    }
-    // Wait for pre-warmed RPC result
-    if (ownerLoading || ownerAddress === undefined) return;
-    const isOwner =
-      account.address.toLowerCase() === String(ownerAddress).toLowerCase();
-    if (!isOwner) navigate("/dashboard", { replace: true });
-  }, [account, ownerAddress, ownerLoading, navigate]);
+    // Still loading — wait
+    if (ownerLoading || userLoading) return;
 
-  // ── Claim Requests state ─────────────────────────────────────────────────
-  const [requestIds] = useState<string[]>(() => readStoredRequestIds());
+    const isOwner = isSsiDeployerConfigured
+      ? account.address.toLowerCase() === ssiDeployerAddress
+      : ownerAddress !== undefined &&
+        account.address.toLowerCase() === String(ownerAddress).toLowerCase();
+
+    const isGovernanceRole = userRole === "governance";
+
+    if (!isOwner && !isGovernanceRole) {
+      navigate("/dashboard", { replace: true });
+    }
+  }, [account, ownerAddress, ownerLoading, userRole, userLoading, navigate]);
+
+  // ── Approver addresses from contract ────────────────────────────────────
+  const { data: rawApproverAddresses } = useReadContract({
+    contract: ssiContract,
+    method: ssiMethods.getApproverAddresses,
+    params: [],
+    queryOptions: { enabled: isSsiContractConfigured },
+  });
+
+  const approverAddresses = useMemo<string[]>(() => {
+    if (!rawApproverAddresses || !Array.isArray(rawApproverAddresses)) return [];
+    return rawApproverAddresses.map(String);
+  }, [rawApproverAddresses]);
+
+  // Fetch user details for each approver address
+  const approverQueries = useQueries({
+    queries: approverAddresses.map((addr) => ({
+      queryKey: ["ssi-approver-did", addr],
+      queryFn: async () => {
+        const did = await readContract({
+          contract: ssiContract,
+          method: ssiMethods.userAddressToDId,
+          params: [addr],
+        });
+        const user = await readContract({
+          contract: ssiContract,
+          method: ssiMethods.getUser,
+          params: [String(did)],
+        });
+        const parsed = parseSsiUser(user);
+        return { address: addr, did: parsed.did, active: parsed.active } as ApproverInfo;
+      },
+      enabled: isSsiContractConfigured && approverAddresses.length > 0,
+      staleTime: 60_000,
+    })),
+  });
+
+  const allApprovers = useMemo<ApproverInfo[]>(() => {
+    return approverQueries
+      .map((q) => q.data)
+      .filter((a): a is ApproverInfo => Boolean(a?.did));
+  }, [approverQueries]);
+
+  // ── Claim Requests - read from contract's allRequestIds ─────────────────
+  const { data: rawRequestIds } = useReadContract({
+    contract: ssiContract,
+    method: ssiMethods.getAllRequestIds,
+    params: [],
+    queryOptions: { enabled: isSsiContractConfigured },
+  });
+
+  // Merge on-chain IDs with localStorage IDs
+  const requestIds = useMemo<string[]>(() => {
+    const onChain = Array.isArray(rawRequestIds)
+      ? (rawRequestIds as unknown[]).map(String).filter(Boolean)
+      : [];
+    const local = readStoredRequestIds();
+    const set = new Set([...onChain, ...local]);
+    return Array.from(set);
+  }, [rawRequestIds]);
 
   const requestQueries = useQueries({
     queries: requestIds.map((requestId) => ({
@@ -182,20 +255,14 @@ export default function Governance() {
   const isRequestsLoading = requestQueries.some((q) => q.isLoading);
 
   const refetchAllRequests = () => {
-    requestIds.forEach((id) =>
-      queryClient.invalidateQueries({ queryKey: ["ssi-claim-request", id] }),
-    );
+    queryClient.invalidateQueries({ queryKey: ["ssi-claim-request"] });
   };
 
   // ── Claim state ─────────────────────────────────────────────────────────
-  const [claimIds, setClaimIds] = useState<string[]>(() =>
-    readStoredClaimIds(),
-  );
+  const [claimIds, setClaimIds] = useState<string[]>(() => readStoredClaimIds());
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState(defaultForm);
-  const [acting, setActing] = useState<
-    Record<string, "approving" | "rejecting">
-  >({});
+  const [acting, setActing] = useState<Record<string, "approving" | "rejecting">>({});
   const [creating, setCreating] = useState(false);
 
   const claimQueries = useQueries({
@@ -239,19 +306,58 @@ export default function Governance() {
 
   const pendingClaims = allClaims.filter((c) => c.status === 0);
   const activeClaims = allClaims.filter((c) => c.status === 1);
-  const rejectedClaims = allClaims.filter(
-    (c) => c.status === 2 || c.status === 3,
-  );
+  const rejectedClaims = allClaims.filter((c) => c.status === 2 || c.status === 3);
   const isLoading = claimQueries.some((q) => q.isLoading);
 
-  const governanceDid = account
-    ? `did:ssi:${account.address.toLowerCase()}`
-    : "";
+  const governanceDid = account ? `did:ssi:${account.address.toLowerCase()}` : "";
 
   const refetchAll = () => {
     claimIds.forEach((id) =>
-      queryClient.invalidateQueries({ queryKey: ["ssi-claim", id] }),
+      queryClient.invalidateQueries({ queryKey: ["ssi-claim", id] })
     );
+  };
+
+  // ── Assign approvers modal state ────────────────────────────────────────
+  const [assignOpen, setAssignOpen] = useState(false);
+  const [assigningRequestId, setAssigningRequestId] = useState("");
+  const [selectedApprovers, setSelectedApprovers] = useState<string[]>([]);
+  const [assigning, setAssigning] = useState(false);
+
+  const openAssignModal = (requestId: string) => {
+    setAssigningRequestId(requestId);
+    setSelectedApprovers([]);
+    setAssignOpen(true);
+  };
+
+  const toggleApprover = (did: string) => {
+    setSelectedApprovers((prev) =>
+      prev.includes(did) ? prev.filter((d) => d !== did) : [...prev, did]
+    );
+  };
+
+  const handleAssignApprovers = async () => {
+    if (!assigningRequestId || selectedApprovers.length === 0) return;
+    setAssigning(true);
+    try {
+      await writeByName("assignApproversToRequest", [
+        assigningRequestId,
+        selectedApprovers,
+      ]);
+      toast({
+        title: "Approvers assigned",
+        description: `${selectedApprovers.length} approver(s) assigned to ${assigningRequestId}`,
+      });
+      setAssignOpen(false);
+      refetchAllRequests();
+    } catch (err) {
+      toast({
+        title: "Assignment failed",
+        description: err instanceof Error ? err.message : "Transaction failed",
+        variant: "destructive",
+      });
+    } finally {
+      setAssigning(false);
+    }
   };
 
   // ── Actions ─────────────────────────────────────────────────────────────
@@ -362,10 +468,7 @@ export default function Governance() {
         <TableBody>
           {isLoading && (
             <TableRow>
-              <TableCell
-                colSpan={showActions ? 7 : 6}
-                className="text-center py-12"
-              >
+              <TableCell colSpan={showActions ? 7 : 6} className="text-center py-12">
                 <Loader2 className="h-5 w-5 animate-spin mx-auto text-muted-foreground" />
               </TableCell>
             </TableRow>
@@ -382,16 +485,11 @@ export default function Governance() {
               ].filter(Boolean) as string[];
 
               return (
-                <TableRow
-                  key={c.id}
-                  className="hover:bg-muted/30 transition-colors"
-                >
+                <TableRow key={c.id} className="hover:bg-muted/30 transition-colors">
                   <TableCell className="text-xs font-mono text-muted-foreground truncate max-w-[160px]">
                     {c.id}
                   </TableCell>
-                  <TableCell className="text-xs font-semibold">
-                    {c.name}
-                  </TableCell>
+                  <TableCell className="text-xs font-semibold">{c.name}</TableCell>
                   <TableCell className="text-xs text-muted-foreground max-w-[200px] truncate">
                     {c.description || "—"}
                   </TableCell>
@@ -460,10 +558,7 @@ export default function Governance() {
 
           {!isLoading && claims.length === 0 && (
             <TableRow>
-              <TableCell
-                colSpan={showActions ? 7 : 6}
-                className="text-center py-14"
-              >
+              <TableCell colSpan={showActions ? 7 : 6} className="text-center py-14">
                 <FileText className="h-9 w-9 text-muted-foreground/20 mx-auto mb-2.5" />
                 <p className="text-xs text-muted-foreground">
                   No claims in this category
@@ -546,7 +641,6 @@ export default function Governance() {
                 Refresh
               </Button>
 
-              {/* Create claim dialog */}
               <Dialog open={open} onOpenChange={setOpen}>
                 <DialogTrigger asChild>
                   <Button
@@ -570,7 +664,7 @@ export default function Governance() {
                         onChange={(e) =>
                           setForm((f) => ({ ...f, name: e.target.value }))
                         }
-                        placeholder="e.g. National Identity"
+                        placeholder="e.g. Aadhaar Card"
                       />
                     </div>
 
@@ -580,19 +674,14 @@ export default function Governance() {
                         className="mt-1"
                         value={form.description}
                         onChange={(e) =>
-                          setForm((f) => ({
-                            ...f,
-                            description: e.target.value,
-                          }))
+                          setForm((f) => ({ ...f, description: e.target.value }))
                         }
                         placeholder="Brief description of this claim"
                       />
                     </div>
 
                     <div>
-                      <Label className="text-xs mb-3 block">
-                        Required Evidence
-                      </Label>
+                      <Label className="text-xs mb-3 block">Required Evidence</Label>
                       <div className="grid grid-cols-2 gap-3">
                         {[
                           { key: "documentRequired", label: "Document" },
@@ -602,16 +691,12 @@ export default function Governance() {
                         ].map(({ key, label }) => (
                           <div key={key} className="flex items-center gap-2.5">
                             <Switch
-                              checked={
-                                form[key as keyof typeof form] as boolean
-                              }
+                              checked={form[key as keyof typeof form] as boolean}
                               onCheckedChange={(v) =>
                                 setForm((f) => ({ ...f, [key]: v }))
                               }
                             />
-                            <Label className="text-xs cursor-pointer">
-                              {label}
-                            </Label>
+                            <Label className="text-xs cursor-pointer">{label}</Label>
                           </div>
                         ))}
                       </div>
@@ -641,7 +726,7 @@ export default function Governance() {
                       {creating || isPending ? (
                         <>
                           <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                          Creating…
+                          Creating...
                         </>
                       ) : (
                         "Create Claim"
@@ -660,11 +745,9 @@ export default function Governance() {
                 <AlertTriangle className="h-4 w-4 shrink-0" />
                 <span>
                   Set{" "}
-                  <code className="font-mono text-xs">
-                    VITE_SSI_CONTRACT_ADDRESS
-                  </code>{" "}
-                  in <code className="font-mono text-xs">client/.env</code> to
-                  enable on-chain actions.
+                  <code className="font-mono text-xs">VITE_SSI_CONTRACT_ADDRESS</code>{" "}
+                  in <code className="font-mono text-xs">client/.env</code> to enable
+                  on-chain actions.
                 </span>
               </Card>
             </motion.div>
@@ -673,34 +756,10 @@ export default function Governance() {
           {/* ── Claims Stats row ── */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             {[
-              {
-                label: "Total Claims",
-                value: allClaims.length,
-                color: "text-primary",
-                bg: "bg-primary/10",
-                Icon: ClipboardList,
-              },
-              {
-                label: "Pending Review",
-                value: pendingClaims.length,
-                color: "text-warning",
-                bg: "bg-warning/10",
-                Icon: ShieldCheck,
-              },
-              {
-                label: "Active",
-                value: activeClaims.length,
-                color: "text-success",
-                bg: "bg-success/10",
-                Icon: CheckCircle2,
-              },
-              {
-                label: "Rejected",
-                value: rejectedClaims.length,
-                color: "text-destructive",
-                bg: "bg-destructive/10",
-                Icon: XCircle,
-              },
+              { label: "Total Claims", value: allClaims.length, color: "text-primary", bg: "bg-primary/10", Icon: ClipboardList },
+              { label: "Pending Review", value: pendingClaims.length, color: "text-warning", bg: "bg-warning/10", Icon: ShieldCheck },
+              { label: "Active", value: activeClaims.length, color: "text-success", bg: "bg-success/10", Icon: CheckCircle2 },
+              { label: "Rejected", value: rejectedClaims.length, color: "text-destructive", bg: "bg-destructive/10", Icon: XCircle },
             ].map((s, i) => (
               <motion.div
                 key={s.label}
@@ -710,18 +769,12 @@ export default function Governance() {
               >
                 <Card className="p-4 shadow-card border-border bg-card hover:shadow-elevated transition-shadow">
                   <div className="flex items-center justify-between mb-3">
-                    <span className="text-xs text-muted-foreground font-medium">
-                      {s.label}
-                    </span>
-                    <div
-                      className={`h-7 w-7 rounded-lg ${s.bg} flex items-center justify-center`}
-                    >
+                    <span className="text-xs text-muted-foreground font-medium">{s.label}</span>
+                    <div className={`h-7 w-7 rounded-lg ${s.bg} flex items-center justify-center`}>
                       <s.Icon className={`h-3.5 w-3.5 ${s.color}`} />
                     </div>
                   </div>
-                  <p className="text-3xl font-bold text-card-foreground">
-                    {s.value}
-                  </p>
+                  <p className="text-3xl font-bold text-card-foreground">{s.value}</p>
                 </Card>
               </motion.div>
             ))}
@@ -741,7 +794,6 @@ export default function Governance() {
                     {allClaims.length}
                   </span>
                 </TabsTrigger>
-
                 <TabsTrigger value="pending" className="text-xs gap-1.5">
                   Pending
                   {pendingClaims.length > 0 ? (
@@ -749,19 +801,15 @@ export default function Governance() {
                       {pendingClaims.length}
                     </span>
                   ) : (
-                    <span className="bg-muted text-muted-foreground text-[10px] px-1.5 py-0.5 rounded-full font-medium">
-                      0
-                    </span>
+                    <span className="bg-muted text-muted-foreground text-[10px] px-1.5 py-0.5 rounded-full font-medium">0</span>
                   )}
                 </TabsTrigger>
-
                 <TabsTrigger value="active" className="text-xs gap-1.5">
                   Active
                   <span className="bg-muted text-muted-foreground text-[10px] px-1.5 py-0.5 rounded-full font-medium">
                     {activeClaims.length}
                   </span>
                 </TabsTrigger>
-
                 <TabsTrigger value="rejected" className="text-xs gap-1.5">
                   Rejected
                   <span className="bg-muted text-muted-foreground text-[10px] px-1.5 py-0.5 rounded-full font-medium">
@@ -770,21 +818,10 @@ export default function Governance() {
                 </TabsTrigger>
               </TabsList>
 
-              <TabsContent value="all" className="mt-0">
-                {renderClaimTable(allClaims, false)}
-              </TabsContent>
-
-              <TabsContent value="pending" className="mt-0">
-                {renderClaimTable(pendingClaims, true)}
-              </TabsContent>
-
-              <TabsContent value="active" className="mt-0">
-                {renderClaimTable(activeClaims, false)}
-              </TabsContent>
-
-              <TabsContent value="rejected" className="mt-0">
-                {renderClaimTable(rejectedClaims, false)}
-              </TabsContent>
+              <TabsContent value="all" className="mt-0">{renderClaimTable(allClaims, false)}</TabsContent>
+              <TabsContent value="pending" className="mt-0">{renderClaimTable(pendingClaims, true)}</TabsContent>
+              <TabsContent value="active" className="mt-0">{renderClaimTable(activeClaims, false)}</TabsContent>
+              <TabsContent value="rejected" className="mt-0">{renderClaimTable(rejectedClaims, false)}</TabsContent>
             </Tabs>
           </motion.div>
 
@@ -795,15 +832,14 @@ export default function Governance() {
             transition={{ duration: 0.35, delay: 0.25 }}
             className="space-y-4"
           >
-            {/* Section header */}
             <div className="flex items-center justify-between">
               <div>
                 <h2 className="text-lg font-semibold tracking-tight flex items-center gap-2">
                   <Send className="h-4 w-4 text-primary" />
-                  Claim Requests
+                  Citizen Document Requests
                 </h2>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  All on-chain credential requests submitted by citizens
+                  Review submissions and assign approvers to verify documents
                 </p>
               </div>
               <Button
@@ -813,9 +849,7 @@ export default function Governance() {
                 disabled={isRequestsLoading}
                 className="text-xs"
               >
-                <RefreshCw
-                  className={`h-3.5 w-3.5 mr-1.5 ${isRequestsLoading ? "animate-spin" : ""}`}
-                />
+                <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${isRequestsLoading ? "animate-spin" : ""}`} />
                 Refresh
               </Button>
             </div>
@@ -823,39 +857,14 @@ export default function Governance() {
             {/* Mini stats */}
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
               {[
-                {
-                  label: "Total",
-                  value: allRequests.length,
-                  color: "text-primary",
-                },
-                {
-                  label: "Pending",
-                  value: allRequests.filter((r) => r.status === 0).length,
-                  color: "text-warning",
-                },
-                {
-                  label: "In Review",
-                  value: allRequests.filter((r) => r.status === 1).length,
-                  color: "text-info",
-                },
-                {
-                  label: "Issued",
-                  value: allRequests.filter((r) => r.status === 3).length,
-                  color: "text-success",
-                },
-                {
-                  label: "Rejected",
-                  value: allRequests.filter((r) => r.status === 4).length,
-                  color: "text-destructive",
-                },
+                { label: "Total", value: allRequests.length, color: "text-primary" },
+                { label: "Pending", value: allRequests.filter((r) => r.status === 0).length, color: "text-warning" },
+                { label: "In Review", value: allRequests.filter((r) => r.status === 1).length, color: "text-info" },
+                { label: "Issued", value: allRequests.filter((r) => r.status === 3).length, color: "text-success" },
+                { label: "Rejected", value: allRequests.filter((r) => r.status === 4).length, color: "text-destructive" },
               ].map((s) => (
-                <Card
-                  key={s.label}
-                  className="p-3 shadow-card border-border bg-card"
-                >
-                  <p className="text-[10px] text-muted-foreground font-medium mb-1.5">
-                    {s.label}
-                  </p>
+                <Card key={s.label} className="p-3 shadow-card border-border bg-card">
+                  <p className="text-[10px] text-muted-foreground font-medium mb-1.5">{s.label}</p>
                   <p className={`text-xl font-bold ${s.color}`}>{s.value}</p>
                 </Card>
               ))}
@@ -867,74 +876,71 @@ export default function Governance() {
                 <TableHeader>
                   <TableRow className="bg-muted/50">
                     <TableHead className="text-xs">Request ID</TableHead>
-                    <TableHead className="text-xs">Claim ID</TableHead>
+                    <TableHead className="text-xs">Claim Type</TableHead>
                     <TableHead className="text-xs">Citizen DID</TableHead>
-                    <TableHead className="text-xs">Document Hash</TableHead>
-                    <TableHead className="text-xs text-center">
-                      Approvers
-                    </TableHead>
+                    <TableHead className="text-xs">IPFS Hash</TableHead>
+                    <TableHead className="text-xs text-center">Approvers</TableHead>
                     <TableHead className="text-xs">Status</TableHead>
-                    <TableHead className="text-xs">Created</TableHead>
-                    <TableHead className="text-xs">Expires</TableHead>
+                    <TableHead className="text-xs text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {isRequestsLoading && (
                     <TableRow>
-                      <TableCell colSpan={8} className="text-center py-12">
+                      <TableCell colSpan={7} className="text-center py-12">
                         <Loader2 className="h-5 w-5 animate-spin mx-auto text-muted-foreground" />
                       </TableCell>
                     </TableRow>
                   )}
 
                   {!isRequestsLoading &&
-                    allRequests.map((r) => (
-                      <TableRow
-                        key={r.requestId}
-                        className="hover:bg-muted/30 transition-colors"
-                      >
-                        <TableCell className="text-xs font-mono text-muted-foreground max-w-[140px] truncate">
-                          {r.requestId}
-                        </TableCell>
-                        <TableCell className="text-xs font-mono text-muted-foreground max-w-[140px] truncate">
-                          {r.claimId}
-                        </TableCell>
-                        <TableCell className="text-xs font-mono text-muted-foreground max-w-[160px] truncate">
-                          {r.citizenDid || "—"}
-                        </TableCell>
-                        <TableCell className="text-xs font-mono text-muted-foreground max-w-[110px] truncate">
-                          {r.documentHash
-                            ? `${r.documentHash.slice(0, 14)}…`
-                            : "—"}
-                        </TableCell>
-                        <TableCell className="text-xs text-center font-medium">
-                          {r.approverDids.length}
-                        </TableCell>
-                        <TableCell>
-                          <StatusBadge
-                            status={claimRequestStatusLabel(r.status)}
-                          />
-                        </TableCell>
-                        <TableCell className="text-xs text-muted-foreground">
-                          {r.createdAt > 0n
-                            ? new Date(
-                                Number(r.createdAt) * 1000,
-                              ).toLocaleDateString()
-                            : "—"}
-                        </TableCell>
-                        <TableCell className="text-xs text-muted-foreground">
-                          {r.expiresAt > 0n
-                            ? new Date(
-                                Number(r.expiresAt) * 1000,
-                              ).toLocaleDateString()
-                            : "—"}
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                    allRequests.map((r) => {
+                      const claimDef = allClaims.find((c) => c.id === r.claimId);
+                      return (
+                        <TableRow key={r.requestId} className="hover:bg-muted/30 transition-colors">
+                          <TableCell className="text-xs font-mono text-muted-foreground max-w-[140px] truncate">
+                            {r.requestId}
+                          </TableCell>
+                          <TableCell className="text-xs font-medium">
+                            {claimDef?.name || r.claimId}
+                          </TableCell>
+                          <TableCell className="text-xs font-mono text-muted-foreground max-w-[140px] truncate">
+                            {r.citizenDid ? `${r.citizenDid.slice(0, 20)}...` : "—"}
+                          </TableCell>
+                          <TableCell className="text-xs font-mono text-muted-foreground max-w-[110px] truncate">
+                            {r.documentHash ? `${r.documentHash.slice(0, 14)}...` : "—"}
+                          </TableCell>
+                          <TableCell className="text-xs text-center font-medium">
+                            {r.approverDids.length}
+                          </TableCell>
+                          <TableCell>
+                            <StatusBadge status={claimRequestStatusLabel(r.status)} />
+                          </TableCell>
+                          <TableCell className="text-right">
+                            {r.status === 0 && (
+                              <Button
+                                size="sm"
+                                className="h-7 text-xs gap-1"
+                                variant="outline"
+                                onClick={() => openAssignModal(r.requestId)}
+                              >
+                                <UserPlus className="h-3 w-3" />
+                                Assign Approvers
+                              </Button>
+                            )}
+                            {r.status === 1 && (
+                              <span className="text-xs text-muted-foreground">
+                                {r.approverDids.length} assigned
+                              </span>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
 
                   {!isRequestsLoading && allRequests.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={8} className="text-center py-14">
+                      <TableCell colSpan={7} className="text-center py-14">
                         <Inbox className="h-9 w-9 text-muted-foreground/20 mx-auto mb-2.5" />
                         <p className="text-xs text-muted-foreground">
                           No claim requests submitted yet
@@ -952,28 +958,121 @@ export default function Governance() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             transition={{ duration: 0.4, delay: 0.35 }}
-            className="flex items-center justify-center gap-2 text-xs text-muted-foreground py-2"
+            className="flex items-center justify-center gap-2 text-xs text-muted-foreground py-2 flex-wrap"
           >
             {[
-              "Issuer Creates Claim",
-              "Governance Reviews",
-              "Status Updated",
-              "Citizen Requests",
-              "Approvers Sign",
+              "Citizen Uploads Doc",
+              "Governance Assigns Approvers",
+              "Approvers Verify",
               "Credential Issued",
+              "Doc Removed from IPFS",
             ].map((step, i, arr) => (
               <span key={step} className="flex items-center gap-2">
-                <span className="bg-muted px-2.5 py-1 rounded-full">
-                  {step}
-                </span>
-                {i < arr.length - 1 && (
-                  <span className="text-muted-foreground/40">→</span>
-                )}
+                <span className="bg-muted px-2.5 py-1 rounded-full">{step}</span>
+                {i < arr.length - 1 && <span className="text-muted-foreground/40">&rarr;</span>}
               </span>
             ))}
           </motion.div>
         </div>
       </div>
+
+      {/* ── Assign Approvers Modal ── */}
+      <Dialog open={assignOpen} onOpenChange={(o) => !assigning && setAssignOpen(o)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Users className="h-4 w-4 text-primary" />
+              Assign Approvers
+            </DialogTitle>
+            <DialogDescription>
+              Select approvers to verify request{" "}
+              <code className="text-xs font-mono">{assigningRequestId}</code>
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 mt-2">
+            {allApprovers.length === 0 ? (
+              <div className="text-center py-8">
+                <Users className="h-8 w-8 text-muted-foreground/20 mx-auto mb-2" />
+                <p className="text-xs text-muted-foreground">
+                  No registered approvers found. Approvers must register first.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <Label className="text-xs">
+                  Available Approvers ({allApprovers.length})
+                </Label>
+                <ScrollArea className="max-h-[280px]">
+                  <div className="space-y-2">
+                    {allApprovers
+                      .filter((a) => a.active)
+                      .map((approver) => (
+                        <div
+                          key={approver.did}
+                          className={[
+                            "flex items-center gap-3 px-3 py-2.5 rounded-lg border transition-colors cursor-pointer",
+                            selectedApprovers.includes(approver.did)
+                              ? "border-primary bg-primary/5"
+                              : "border-border hover:bg-muted/30",
+                          ].join(" ")}
+                          onClick={() => toggleApprover(approver.did)}
+                        >
+                          <Checkbox
+                            checked={selectedApprovers.includes(approver.did)}
+                            onCheckedChange={() => toggleApprover(approver.did)}
+                          />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-xs font-mono text-card-foreground truncate">
+                              {approver.did}
+                            </p>
+                            <p className="text-[10px] text-muted-foreground">
+                              {shortAddress(approver.address)}
+                            </p>
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                </ScrollArea>
+              </div>
+            )}
+
+            {selectedApprovers.length > 0 && (
+              <p className="text-xs text-muted-foreground">
+                {selectedApprovers.length} approver(s) selected
+              </p>
+            )}
+
+            <div className="flex gap-2 pt-1">
+              <Button
+                variant="outline"
+                className="flex-1"
+                onClick={() => setAssignOpen(false)}
+                disabled={assigning}
+              >
+                Cancel
+              </Button>
+              <Button
+                className="flex-1 gradient-primary text-primary-foreground"
+                disabled={selectedApprovers.length === 0 || assigning || isPending}
+                onClick={handleAssignApprovers}
+              >
+                {assigning ? (
+                  <>
+                    <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                    Assigning...
+                  </>
+                ) : (
+                  <>
+                    <UserPlus className="h-3.5 w-3.5 mr-1.5" />
+                    Assign ({selectedApprovers.length})
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

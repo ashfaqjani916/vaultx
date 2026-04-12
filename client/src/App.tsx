@@ -13,7 +13,6 @@ import Governance from './pages/Governance'
 import CitizenDashboard from './pages/CitizenDashboard'
 import ApproverDashboard from './pages/ApproverDashboard'
 import Dashboard from './pages/Dashboard'
-import IdentityWallet from './pages/IdentityWallet'
 import ClaimRegistry from './pages/ClaimRegistry'
 import ClaimRequests from './pages/ClaimRequests'
 import Verification from './pages/Verification'
@@ -71,14 +70,6 @@ const App = () => (
                 element={
                   <RoleGuard>
                     <Dashboard />
-                  </RoleGuard>
-                }
-              />
-              <Route
-                path="/identity"
-                element={
-                  <RoleGuard requireRegistered={false}>
-                    <IdentityWallet />
                   </RoleGuard>
                 }
               />

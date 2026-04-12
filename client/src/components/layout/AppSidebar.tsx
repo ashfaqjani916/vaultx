@@ -1,5 +1,5 @@
 import {
-  LayoutDashboard, Wallet, FileText, ClipboardList, ShieldCheck,
+  LayoutDashboard, FileText, ClipboardList, ShieldCheck,
   Award, FileSearch, ScrollText, Settings, Hexagon
 } from 'lucide-react';
 import { NavLink } from '@/components/NavLink';
@@ -13,7 +13,6 @@ import type { UserRole } from '@/types';
 
 const navItems = [
   { title: 'Dashboard', url: '/dashboard', icon: LayoutDashboard, roles: ['citizen', 'approver', 'verifier', 'governance'] },
-  { title: 'Identity Wallet', url: '/identity', icon: Wallet, roles: ['citizen', 'approver', 'verifier', 'governance'] },
   { title: 'Claim Registry', url: '/claims', icon: FileText, roles: ['governance'] },
   { title: 'Claim Requests', url: '/claim-requests', icon: ClipboardList, roles: ['citizen', 'approver'] },
   { title: 'Verification', url: '/verification', icon: ShieldCheck, roles: ['approver'] },
@@ -31,7 +30,7 @@ export function AppSidebar() {
 
   const allowedNav = isRegistered
     ? navItems.filter((item) => item.roles.includes(currentRole))
-    : navItems.filter((item) => item.url === '/identity' || item.url === '/settings');
+    : navItems.filter((item) => item.url === '/settings');
 
   return (
     <Sidebar collapsible="icon" className="border-r border-sidebar-border">

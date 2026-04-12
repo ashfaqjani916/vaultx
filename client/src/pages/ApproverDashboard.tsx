@@ -1,5 +1,8 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { Link } from "react-router-dom";
+import { useQueries, useQueryClient } from "@tanstack/react-query";
+import { useActiveAccount } from "thirdweb/react";
+import { readContract } from "thirdweb";
 import { motion } from "framer-motion";
 import {
   Hexagon,
@@ -10,7 +13,7 @@ import {
   FileImage,
   File,
   Eye,
-  Download,
+  ExternalLink,
   ClipboardList,
   Clock,
   Shield,
@@ -28,91 +31,20 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
-
-// ── Mock data ─────────────────────────────────────────────────────────────────
-type DocItem = {
-  name: string;
-  size: string;
-  type: string;
-  hash: string;
-};
-
-type RequestItem = {
-  id: string;
-  citizenDid: string;
-  citizenAddress: string;
-  claimType: string;
-  documents: DocItem[];
-  status: "pending" | "in_review" | "approved" | "rejected";
-  submittedAt: string;
-  assignedAt: string;
-};
-
-const INITIAL_REQUESTS: RequestItem[] = [
-  {
-    id: "req-001",
-    citizenDid: "did:ssi:0x71c7656ec7ab88b098defb751b7401b5f6d8976f",
-    citizenAddress: "0x71C7…976F",
-    claimType: "National Identity",
-    documents: [
-      {
-        name: "passport.pdf",
-        size: "2.4 MB",
-        type: "Passport",
-        hash: "0xQmT4NxHvs…a8f2",
-      },
-      {
-        name: "national_id.jpg",
-        size: "890 KB",
-        type: "National ID",
-        hash: "0xQmP2bCw…e5b9",
-      },
-    ],
-    status: "pending",
-    submittedAt: "Jan 15, 2025",
-    assignedAt: "Jan 15, 2025",
-  },
-  {
-    id: "req-003",
-    citizenDid: "did:ssi:0xab8483f64d9c6d1ecf9b849ae677dd3315835cb2",
-    citizenAddress: "0xAb84…5cb2",
-    claimType: "Address Verification",
-    documents: [
-      {
-        name: "utility_bill.pdf",
-        size: "1.1 MB",
-        type: "Proof of Address",
-        hash: "0xQmR7aKz…c3d1",
-      },
-    ],
-    status: "in_review",
-    submittedAt: "Jan 16, 2025",
-    assignedAt: "Jan 16, 2025",
-  },
-  {
-    id: "req-005",
-    citizenDid: "did:ssi:0x4b20993bc481177ec7e8f571cecae8a9e22c02db",
-    citizenAddress: "0x4B20…02db",
-    claimType: "Employment Verification",
-    documents: [
-      {
-        name: "employment_letter.pdf",
-        size: "542 KB",
-        type: "Employment Letter",
-        hash: "0xQmL9mWp…f7a3",
-      },
-      {
-        name: "pay_stub.pdf",
-        size: "318 KB",
-        type: "Pay Stub",
-        hash: "0xQmK5dNq…b2c8",
-      },
-    ],
-    status: "pending",
-    submittedAt: "Jan 17, 2025",
-    assignedAt: "Jan 17, 2025",
-  },
-];
+import { ssiContract, isSsiContractConfigured } from "@/lib/thirdweb";
+import { ssiMethods } from "@/lib/ssiMethods";
+import {
+  parseSsiClaimRequest,
+  parseSsiClaim,
+  claimRequestStatusLabel,
+  type SsiClaimRequest,
+  type SsiClaim,
+} from "@/lib/ssiParsers";
+import { useOnchainUser } from "@/hooks/useOnchainUser";
+import { useSSIWrite } from "@/hooks/useSSIContract";
+import { toast } from "@/hooks/use-toast";
+import { getIPFSUrl, fetchFromIPFS, unpinFromIPFS } from "@/lib/ipfs";
+import { readStoredRequestIds } from "@/hooks/useOnchainClaimRequests";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function DocIcon({ name }: { name: string }) {
@@ -129,41 +61,240 @@ const cardAnim = (i: number) => ({
   transition: { duration: 0.3, delay: 0.06 * i },
 });
 
+type IPFSMetadata = {
+  documentFields: Record<string, string>;
+  fileName: string;
+  fileSize: number;
+  fileType: string;
+  fileCid: string;
+  uploadedAt: string;
+};
+
 // ── Component ─────────────────────────────────────────────────────────────────
 export default function ApproverDashboard() {
-  const [requests, setRequests] = useState<RequestItem[]>(INITIAL_REQUESTS);
-  const [viewing, setViewing] = useState<RequestItem | null>(null);
-  const [remarks, setRemarks] = useState("");
-  const [acting, setActing] = useState<
-    Record<string, "approving" | "rejecting">
-  >({});
+  const account = useActiveAccount();
+  const { did, isRegistered, role } = useOnchainUser();
+  const { writeByName, isPending } = useSSIWrite();
+  const queryClient = useQueryClient();
 
-  const pending = requests.filter(
-    (r) => r.status === "pending" || r.status === "in_review",
+  // ── Fetch all request IDs from contract + localStorage ──────────────────
+  const allRequestIdsQuery = useQueries({
+    queries: [
+      {
+        queryKey: ["ssi-all-request-ids"],
+        queryFn: async () => {
+          try {
+            const ids = await readContract({
+              contract: ssiContract,
+              method: ssiMethods.getAllRequestIds,
+              params: [],
+            });
+            return Array.isArray(ids) ? (ids as unknown[]).map(String) : [];
+          } catch {
+            return [];
+          }
+        },
+        enabled: isSsiContractConfigured,
+        staleTime: 10_000,
+      },
+    ],
+  });
+
+  const allRequestIds = useMemo<string[]>(() => {
+    const onChain = allRequestIdsQuery[0]?.data ?? [];
+    const local = readStoredRequestIds();
+    return Array.from(new Set([...onChain, ...local]));
+  }, [allRequestIdsQuery]);
+
+  // Fetch each request
+  const requestQueries = useQueries({
+    queries: allRequestIds.map((requestId) => ({
+      queryKey: ["ssi-claim-request", requestId],
+      queryFn: () =>
+        readContract({
+          contract: ssiContract,
+          method: ssiMethods.getClaimRequest,
+          params: [requestId],
+        }),
+      enabled: isSsiContractConfigured,
+      retry: 1,
+      staleTime: 10_000,
+    })),
+  });
+
+  const allRequests = useMemo<SsiClaimRequest[]>(() => {
+    return requestQueries
+      .map((q) => {
+        if (!q.data) return null;
+        return parseSsiClaimRequest(q.data);
+      })
+      .filter((r): r is SsiClaimRequest => Boolean(r?.requestId));
+  }, [requestQueries]);
+
+  // Filter to requests assigned to this approver
+  const myRequests = useMemo(
+    () => allRequests.filter((r) => r.approverDids.includes(did)),
+    [allRequests, did]
   );
-  const approved = requests.filter((r) => r.status === "approved");
-  const rejected = requests.filter((r) => r.status === "rejected");
 
-  const act = async (
-    id: string,
-    action: "approving" | "rejecting",
-  ) => {
-    setActing((p) => ({ ...p, [id]: action }));
-    await new Promise((r) => setTimeout(r, 1400));
-    setRequests((prev) =>
-      prev.map((r) =>
-        r.id === id
-          ? { ...r, status: action === "approving" ? "approved" : "rejected" }
-          : r,
-      ),
-    );
-    setActing((p) => {
-      const n = { ...p };
-      delete n[id];
-      return n;
+  const pending = myRequests.filter((r) => r.status === 1); // IN_REVIEW
+  const completed = myRequests.filter((r) => r.status === 3 || r.status === 4); // ISSUED or REJECTED
+
+  // Fetch claim definitions for display
+  const claimIdSet = useMemo(
+    () => Array.from(new Set(myRequests.map((r) => r.claimId))),
+    [myRequests]
+  );
+
+  const claimQueries = useQueries({
+    queries: claimIdSet.map((claimId) => ({
+      queryKey: ["ssi-claim", claimId],
+      queryFn: () =>
+        readContract({
+          contract: ssiContract,
+          method: ssiMethods.getClaim,
+          params: [claimId],
+        }),
+      enabled: isSsiContractConfigured,
+      staleTime: 30_000,
+    })),
+  });
+
+  const claimMap = useMemo<Record<string, SsiClaim>>(() => {
+    const map: Record<string, SsiClaim> = {};
+    claimQueries.forEach((q) => {
+      if (!q.data) return;
+      const c = parseSsiClaim(q.data);
+      if (c.claimId) map[c.claimId] = c;
     });
-    if (viewing?.id === id) setViewing(null);
+    return map;
+  }, [claimQueries]);
+
+  // ── Review modal state ──────────────────────────────────────────────────
+  const [viewing, setViewing] = useState<SsiClaimRequest | null>(null);
+  const [remarks, setRemarks] = useState("");
+  const [ipfsData, setIpfsData] = useState<IPFSMetadata | null>(null);
+  const [loadingIpfs, setLoadingIpfs] = useState(false);
+  const [acting, setActing] = useState<Record<string, "approving" | "rejecting">>({});
+
+  const openReview = async (req: SsiClaimRequest) => {
+    setViewing(req);
+    setRemarks("");
+    setIpfsData(null);
+
+    if (req.documentHash) {
+      setLoadingIpfs(true);
+      try {
+        const data = await fetchFromIPFS<IPFSMetadata>(req.documentHash);
+        setIpfsData(data);
+      } catch (err) {
+        console.error("Failed to fetch IPFS metadata:", err);
+      } finally {
+        setLoadingIpfs(false);
+      }
+    }
   };
+
+  // ── Approve with signature ──────────────────────────────────────────────
+  const handleApprove = async (requestId: string) => {
+    if (!account) return;
+    setActing((p) => ({ ...p, [requestId]: "approving" }));
+
+    try {
+      const req = myRequests.find((r) => r.requestId === requestId);
+      if (!req) throw new Error("Request not found");
+
+      // Create message hash matching the contract's getMessageHash
+      const hashResult = await readContract({
+        contract: ssiContract,
+        method: ssiMethods.getMessageHash,
+        params: [requestId, req.claimId, req.citizenDid],
+      });
+
+      // Sign the hash with the connected wallet
+      const hash = hashResult as `0x${string}`;
+      const ethHash = await account.signMessage({
+        message: { raw: hash },
+      });
+
+      // Submit approval with signature
+      await writeByName("submitApproval", [requestId, ethHash]);
+
+      toast({ title: "Request approved", description: requestId });
+
+      // Try to unpin the document from IPFS after successful approval
+      if (req.documentHash) {
+        try {
+          // Fetch metadata to get the file CID too
+          const meta = ipfsData || (await fetchFromIPFS<IPFSMetadata>(req.documentHash));
+          if (meta?.fileCid) {
+            await unpinFromIPFS(meta.fileCid);
+          }
+          await unpinFromIPFS(req.documentHash);
+        } catch {
+          // Non-critical: unpin failure doesn't affect the approval
+        }
+      }
+
+      // Refresh data
+      queryClient.invalidateQueries({ queryKey: ["ssi-claim-request", requestId] });
+      if (viewing?.requestId === requestId) setViewing(null);
+    } catch (err) {
+      toast({
+        title: "Approval failed",
+        description: err instanceof Error ? err.message : "Transaction failed",
+        variant: "destructive",
+      });
+    } finally {
+      setActing((p) => {
+        const n = { ...p };
+        delete n[requestId];
+        return n;
+      });
+    }
+  };
+
+  // ── Reject ──────────────────────────────────────────────────────────────
+  const handleReject = async (requestId: string) => {
+    setActing((p) => ({ ...p, [requestId]: "rejecting" }));
+
+    try {
+      await writeByName("rejectClaimRequest", [requestId]);
+
+      toast({ title: "Request rejected", description: requestId });
+
+      queryClient.invalidateQueries({ queryKey: ["ssi-claim-request", requestId] });
+      if (viewing?.requestId === requestId) setViewing(null);
+    } catch (err) {
+      toast({
+        title: "Rejection failed",
+        description: err instanceof Error ? err.message : "Transaction failed",
+        variant: "destructive",
+      });
+    } finally {
+      setActing((p) => {
+        const n = { ...p };
+        delete n[requestId];
+        return n;
+      });
+    }
+  };
+
+  const isRequestsLoading = requestQueries.some((q) => q.isLoading);
+
+  if (!account) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <Card className="p-8 text-center max-w-md">
+          <Hexagon className="h-10 w-10 text-primary mx-auto mb-3" />
+          <p className="text-sm font-medium mb-2">Wallet not connected</p>
+          <Link to="/">
+            <Button className="gradient-primary text-primary-foreground">Go to Login</Button>
+          </Link>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -179,12 +310,8 @@ export default function ApproverDashboard() {
           </span>
         </div>
         <Link to="/dashboard">
-          <Button
-            variant="ghost"
-            size="sm"
-            className="text-xs text-muted-foreground"
-          >
-            ← Dashboard
+          <Button variant="ghost" size="sm" className="text-xs text-muted-foreground">
+            &larr; Dashboard
           </Button>
         </Link>
       </nav>
@@ -200,196 +327,166 @@ export default function ApproverDashboard() {
           >
             <h1 className="text-2xl font-bold tracking-tight">Review Queue</h1>
             <p className="text-sm text-muted-foreground mt-0.5">
-              Verify documents submitted by citizens for credential issuance.
-              You have been assigned by governance.
+              Verify documents submitted by citizens. You have been assigned by governance.
             </p>
           </motion.div>
 
           {/* Stats */}
           <div className="grid grid-cols-3 gap-4">
             {[
-              {
-                label: "Pending",
-                value: pending.length,
-                color: "text-warning",
-                bg: "bg-warning/10",
-                Icon: Clock,
-              },
-              {
-                label: "Approved",
-                value: approved.length,
-                color: "text-success",
-                bg: "bg-success/10",
-                Icon: CheckCircle2,
-              },
-              {
-                label: "Rejected",
-                value: rejected.length,
-                color: "text-destructive",
-                bg: "bg-destructive/10",
-                Icon: XCircle,
-              },
+              { label: "Pending", value: pending.length, color: "text-warning", bg: "bg-warning/10", Icon: Clock },
+              { label: "Approved", value: completed.filter((r) => r.status === 3).length, color: "text-success", bg: "bg-success/10", Icon: CheckCircle2 },
+              { label: "Rejected", value: completed.filter((r) => r.status === 4).length, color: "text-destructive", bg: "bg-destructive/10", Icon: XCircle },
             ].map((s, i) => (
               <motion.div key={s.label} {...cardAnim(i)}>
                 <Card className="p-4 shadow-card border-border bg-card hover:shadow-elevated transition-shadow">
                   <div className="flex items-center justify-between mb-3">
-                    <span className="text-xs text-muted-foreground font-medium">
-                      {s.label}
-                    </span>
-                    <div
-                      className={`h-7 w-7 rounded-lg ${s.bg} flex items-center justify-center`}
-                    >
+                    <span className="text-xs text-muted-foreground font-medium">{s.label}</span>
+                    <div className={`h-7 w-7 rounded-lg ${s.bg} flex items-center justify-center`}>
                       <s.Icon className={`h-3.5 w-3.5 ${s.color}`} />
                     </div>
                   </div>
-                  <p className="text-3xl font-bold text-card-foreground">
-                    {s.value}
-                  </p>
+                  <p className="text-3xl font-bold text-card-foreground">{s.value}</p>
                 </Card>
               </motion.div>
             ))}
           </div>
 
+          {/* Loading */}
+          {isRequestsLoading && (
+            <div className="flex justify-center py-12">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          )}
+
           {/* Pending request cards */}
-          <div className="space-y-3">
-            <h2 className="font-semibold text-sm flex items-center gap-2">
-              <ClipboardList className="h-4 w-4 text-primary" />
-              Assigned Requests
-            </h2>
+          {!isRequestsLoading && (
+            <div className="space-y-3">
+              <h2 className="font-semibold text-sm flex items-center gap-2">
+                <ClipboardList className="h-4 w-4 text-primary" />
+                Assigned Requests
+              </h2>
 
-            {pending.length === 0 ? (
-              <motion.div
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-              >
-                <Card className="p-14 text-center shadow-card border-border bg-card">
-                  <CheckCircle2 className="h-10 w-10 text-success/25 mx-auto mb-3" />
-                  <p className="text-sm font-medium">All caught up!</p>
-                  <p className="text-xs text-muted-foreground mt-1">
-                    No pending requests to review.
-                  </p>
-                </Card>
-              </motion.div>
-            ) : (
-              <div className="space-y-3">
-                {pending.map((req, i) => {
-                  const isActing = Boolean(acting[req.id]);
-                  return (
-                    <motion.div key={req.id} {...cardAnim(i)}>
-                      <Card className="p-5 shadow-card border-border bg-card">
-                        {/* Card header */}
-                        <div className="flex items-start justify-between mb-4">
-                          <div>
-                            <div className="flex items-center gap-2 mb-1">
-                              <span className="text-xs font-mono text-muted-foreground">
-                                {req.id}
-                              </span>
-                              <StatusBadge status={req.status} />
-                            </div>
-                            <h3 className="font-semibold text-sm">
-                              {req.claimType}
-                            </h3>
-                          </div>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="text-xs shrink-0"
-                            onClick={() => {
-                              setViewing(req);
-                              setRemarks("");
-                            }}
-                          >
-                            <Eye className="h-3.5 w-3.5 mr-1.5" />
-                            Full Review
-                          </Button>
-                        </div>
-
-                        {/* Meta grid */}
-                        <div className="grid sm:grid-cols-2 gap-3 mb-4 text-xs">
-                          <div>
-                            <p className="text-muted-foreground mb-0.5">
-                              Citizen DID
-                            </p>
-                            <code className="font-mono text-card-foreground">
-                              {req.citizenDid.slice(0, 30)}…
-                            </code>
-                          </div>
-                          <div>
-                            <p className="text-muted-foreground mb-0.5">
-                              Submitted
-                            </p>
-                            <p className="font-medium">{req.submittedAt}</p>
-                          </div>
-                        </div>
-
-                        {/* Document list */}
-                        <div className="space-y-1.5 mb-4">
-                          {req.documents.map((doc) => (
-                            <div
-                              key={doc.name}
-                              className="flex items-center gap-2.5 px-3 py-2 rounded-lg bg-muted/50 border border-border"
-                            >
-                              <DocIcon name={doc.name} />
-                              <div className="flex-1 min-w-0">
-                                <p className="text-xs font-medium truncate">
-                                  {doc.name}
-                                </p>
-                                <p className="text-[10px] text-muted-foreground">
-                                  {doc.type} · {doc.size}
-                                </p>
+              {pending.length === 0 ? (
+                <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+                  <Card className="p-14 text-center shadow-card border-border bg-card">
+                    <CheckCircle2 className="h-10 w-10 text-success/25 mx-auto mb-3" />
+                    <p className="text-sm font-medium">All caught up!</p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      No pending requests to review.
+                    </p>
+                  </Card>
+                </motion.div>
+              ) : (
+                <div className="space-y-3">
+                  {pending.map((req, i) => {
+                    const isActing = Boolean(acting[req.requestId]);
+                    const claim = claimMap[req.claimId];
+                    return (
+                      <motion.div key={req.requestId} {...cardAnim(i)}>
+                        <Card className="p-5 shadow-card border-border bg-card">
+                          <div className="flex items-start justify-between mb-4">
+                            <div>
+                              <div className="flex items-center gap-2 mb-1">
+                                <span className="text-xs font-mono text-muted-foreground">
+                                  {req.requestId}
+                                </span>
+                                <StatusBadge status={claimRequestStatusLabel(req.status)} />
                               </div>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-6 w-6 p-0 text-muted-foreground hover:text-foreground"
-                                title="Fetch document"
-                              >
-                                <Download className="h-3 w-3" />
-                              </Button>
+                              <h3 className="font-semibold text-sm">
+                                {claim?.claimType || req.claimId}
+                              </h3>
                             </div>
-                          ))}
-                        </div>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="text-xs shrink-0"
+                              onClick={() => openReview(req)}
+                            >
+                              <Eye className="h-3.5 w-3.5 mr-1.5" />
+                              Full Review
+                            </Button>
+                          </div>
 
-                        {/* Inline approve / reject */}
-                        <div className="flex gap-2">
-                          <Button
-                            size="sm"
-                            className="flex-1 bg-success/15 text-success hover:bg-success/25 border border-success/20 shadow-none text-xs"
-                            disabled={isActing}
-                            onClick={() => act(req.id, "approving")}
-                          >
-                            {acting[req.id] === "approving" ? (
-                              <Loader2 className="h-3 w-3 animate-spin mr-1" />
-                            ) : (
-                              <CheckCircle2 className="h-3 w-3 mr-1" />
-                            )}
-                            Approve
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="flex-1 text-destructive hover:bg-destructive/10 border border-destructive/20 text-xs"
-                            disabled={isActing}
-                            onClick={() => act(req.id, "rejecting")}
-                          >
-                            {acting[req.id] === "rejecting" ? (
-                              <Loader2 className="h-3 w-3 animate-spin mr-1" />
-                            ) : (
-                              <XCircle className="h-3 w-3 mr-1" />
-                            )}
-                            Reject
-                          </Button>
-                        </div>
-                      </Card>
-                    </motion.div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
+                          <div className="grid sm:grid-cols-2 gap-3 mb-4 text-xs">
+                            <div>
+                              <p className="text-muted-foreground mb-0.5">Citizen DID</p>
+                              <code className="font-mono text-card-foreground">
+                                {req.citizenDid.slice(0, 30)}...
+                              </code>
+                            </div>
+                            <div>
+                              <p className="text-muted-foreground mb-0.5">Submitted</p>
+                              <p className="font-medium">
+                                {req.createdAt > 0n
+                                  ? new Date(Number(req.createdAt) * 1000).toLocaleDateString()
+                                  : "—"}
+                              </p>
+                            </div>
+                          </div>
+
+                          {/* IPFS document link */}
+                          {req.documentHash && (
+                            <div className="mb-4 px-3 py-2 rounded-lg bg-muted/50 border border-border flex items-center gap-2">
+                              <FileText className="h-4 w-4 text-primary shrink-0" />
+                              <div className="flex-1 min-w-0">
+                                <p className="text-xs font-medium">IPFS Document</p>
+                                <code className="text-[10px] text-muted-foreground font-mono truncate block">
+                                  {req.documentHash}
+                                </code>
+                              </div>
+                              <a
+                                href={getIPFSUrl(req.documentHash)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                              >
+                                <Button variant="ghost" size="sm" className="h-6 w-6 p-0">
+                                  <ExternalLink className="h-3 w-3" />
+                                </Button>
+                              </a>
+                            </div>
+                          )}
+
+                          <div className="flex gap-2">
+                            <Button
+                              size="sm"
+                              className="flex-1 bg-success/15 text-success hover:bg-success/25 border border-success/20 shadow-none text-xs"
+                              disabled={isActing || isPending}
+                              onClick={() => handleApprove(req.requestId)}
+                            >
+                              {acting[req.requestId] === "approving" ? (
+                                <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                              ) : (
+                                <CheckCircle2 className="h-3 w-3 mr-1" />
+                              )}
+                              Approve
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              className="flex-1 text-destructive hover:bg-destructive/10 border border-destructive/20 text-xs"
+                              disabled={isActing || isPending}
+                              onClick={() => handleReject(req.requestId)}
+                            >
+                              {acting[req.requestId] === "rejecting" ? (
+                                <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                              ) : (
+                                <XCircle className="h-3 w-3 mr-1" />
+                              )}
+                              Reject
+                            </Button>
+                          </div>
+                        </Card>
+                      </motion.div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Completed section */}
-          {(approved.length > 0 || rejected.length > 0) && (
+          {completed.length > 0 && (
             <motion.div
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
@@ -401,21 +498,21 @@ export default function ApproverDashboard() {
                 Completed
               </h2>
               <div className="space-y-2">
-                {[...approved, ...rejected].map((req) => (
+                {completed.map((req) => (
                   <Card
-                    key={req.id}
+                    key={req.requestId}
                     className="px-4 py-3 shadow-card border-border bg-card flex items-center justify-between"
                   >
                     <div className="flex items-center gap-3">
                       <div className="text-xs">
-                        <span className="font-mono text-muted-foreground">
-                          {req.id}
+                        <span className="font-mono text-muted-foreground">{req.requestId}</span>
+                        <span className="mx-2 text-muted-foreground/40">&middot;</span>
+                        <span className="font-medium">
+                          {claimMap[req.claimId]?.claimType || req.claimId}
                         </span>
-                        <span className="mx-2 text-muted-foreground/40">·</span>
-                        <span className="font-medium">{req.claimType}</span>
                       </div>
                     </div>
-                    <StatusBadge status={req.status} />
+                    <StatusBadge status={claimRequestStatusLabel(req.status)} />
                   </Card>
                 ))}
               </div>
@@ -425,19 +522,19 @@ export default function ApproverDashboard() {
       </div>
 
       {/* ── Full Review Modal ── */}
-      <Dialog
-        open={Boolean(viewing)}
-        onOpenChange={(o) => !o && setViewing(null)}
-      >
+      <Dialog open={Boolean(viewing)} onOpenChange={(o) => !o && setViewing(null)}>
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Shield className="h-4 w-4 text-primary" />
-              Review — {viewing?.id}
+              Review — {viewing?.requestId}
             </DialogTitle>
             <DialogDescription>
               Verify submitted documents for{" "}
-              <strong>{viewing?.claimType}</strong> and record your decision.
+              <strong>
+                {viewing ? claimMap[viewing.claimId]?.claimType || viewing.claimId : ""}
+              </strong>{" "}
+              and record your decision.
             </DialogDescription>
           </DialogHeader>
 
@@ -447,90 +544,126 @@ export default function ApproverDashboard() {
               <div className="rounded-lg bg-muted/50 border border-border p-3 text-xs space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-muted-foreground">Citizen DID</span>
-                  <code className="font-mono">{viewing.citizenAddress}</code>
+                  <code className="font-mono text-[10px]">{viewing.citizenDid.slice(0, 30)}...</code>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-muted-foreground">Claim Type</span>
-                  <span className="font-medium">{viewing.claimType}</span>
+                  <span className="font-medium">
+                    {claimMap[viewing.claimId]?.claimType || viewing.claimId}
+                  </span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-muted-foreground">Submitted</span>
-                  <span>{viewing.submittedAt}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-muted-foreground">Assigned to you</span>
-                  <span>{viewing.assignedAt}</span>
+                  <span>
+                    {viewing.createdAt > 0n
+                      ? new Date(Number(viewing.createdAt) * 1000).toLocaleDateString()
+                      : "—"}
+                  </span>
                 </div>
               </div>
 
-              {/* Documents */}
+              {/* IPFS Document Details */}
               <div>
-                <Label className="text-xs mb-2 block">
-                  Submitted Documents{" "}
-                  <span className="text-muted-foreground font-normal">
-                    ({viewing.documents.length})
-                  </span>
-                </Label>
-                <div className="space-y-2">
-                  {viewing.documents.map((doc) => (
-                    <div
-                      key={doc.name}
-                      className="rounded-lg bg-muted/50 border border-border p-3 space-y-2"
-                    >
-                      <div className="flex items-center gap-2.5">
-                        <DocIcon name={doc.name} />
+                <Label className="text-xs mb-2 block">Submitted Document</Label>
+                {loadingIpfs ? (
+                  <div className="flex items-center gap-2 py-4 justify-center text-xs text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Loading from IPFS...
+                  </div>
+                ) : ipfsData ? (
+                  <div className="space-y-3">
+                    {/* File info */}
+                    <div className="rounded-lg bg-muted/50 border border-border p-3">
+                      <div className="flex items-center gap-2.5 mb-2">
+                        <DocIcon name={ipfsData.fileName} />
                         <div className="flex-1 min-w-0">
-                          <p className="text-xs font-medium truncate">
-                            {doc.name}
-                          </p>
+                          <p className="text-xs font-medium truncate">{ipfsData.fileName}</p>
                           <p className="text-[10px] text-muted-foreground">
-                            {doc.type} · {doc.size}
+                            {ipfsData.fileType} &middot;{" "}
+                            {ipfsData.fileSize > 0
+                              ? `${(ipfsData.fileSize / 1024).toFixed(1)} KB`
+                              : "—"}
                           </p>
                         </div>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-7 text-xs gap-1 shrink-0"
+                        <a
+                          href={getIPFSUrl(ipfsData.fileCid)}
+                          target="_blank"
+                          rel="noopener noreferrer"
                         >
-                          <Download className="h-3 w-3" />
-                          Fetch
-                        </Button>
+                          <Button variant="outline" size="sm" className="h-7 text-xs gap-1">
+                            <ExternalLink className="h-3 w-3" />
+                            View File
+                          </Button>
+                        </a>
                       </div>
-                      <div className="flex items-center gap-1.5 pt-0.5 border-t border-border/60">
-                        <span className="text-[10px] text-muted-foreground">
-                          On-chain hash:
-                        </span>
-                        <code className="text-[10px] font-mono text-muted-foreground truncate">
-                          {doc.hash}
-                        </code>
+                      <div className="text-[10px] text-muted-foreground border-t border-border/60 pt-2 mt-2">
+                        <span>IPFS CID: </span>
+                        <code className="font-mono">{ipfsData.fileCid}</code>
                       </div>
                     </div>
-                  ))}
-                </div>
+
+                    {/* Credential fields */}
+                    {Object.keys(ipfsData.documentFields).length > 0 && (
+                      <div className="rounded-lg bg-muted/50 border border-border p-3">
+                        <p className="text-xs font-medium mb-2">Credential Fields</p>
+                        <div className="space-y-1.5">
+                          {Object.entries(ipfsData.documentFields).map(([key, value]) => (
+                            <div key={key} className="flex items-center justify-between text-xs">
+                              <span className="text-muted-foreground capitalize">
+                                {key.replace(/([A-Z])/g, " $1").trim()}
+                              </span>
+                              <span className="font-medium">{value || "—"}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : viewing.documentHash ? (
+                  <div className="rounded-lg bg-muted/50 border border-border p-3">
+                    <div className="flex items-center gap-2">
+                      <FileText className="h-4 w-4 text-primary" />
+                      <div className="flex-1">
+                        <p className="text-xs font-medium">Document on IPFS</p>
+                        <code className="text-[10px] text-muted-foreground font-mono">
+                          {viewing.documentHash}
+                        </code>
+                      </div>
+                      <a
+                        href={getIPFSUrl(viewing.documentHash)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        <Button variant="outline" size="sm" className="h-7 text-xs gap-1">
+                          <ExternalLink className="h-3 w-3" />
+                          View
+                        </Button>
+                      </a>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">No document attached.</p>
+                )}
               </div>
 
               {/* Warning */}
               <div className="flex items-start gap-2 bg-warning/5 border border-warning/20 rounded-lg px-3 py-2.5 text-xs text-muted-foreground">
                 <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0 text-warning" />
                 <span>
-                  Your approval will be recorded on-chain as a cryptographic
-                  signature. Ensure documents match the citizen's claimed
-                  identity before approving.
+                  Your approval will be recorded on-chain as a cryptographic signature.
+                  Ensure documents match the citizen's claimed identity before approving.
                 </span>
               </div>
 
               {/* Remarks */}
               <div>
                 <Label className="text-xs mb-1.5 block">
-                  Remarks{" "}
-                  <span className="text-muted-foreground font-normal">
-                    (optional)
-                  </span>
+                  Remarks <span className="text-muted-foreground font-normal">(optional)</span>
                 </Label>
                 <Textarea
                   value={remarks}
                   onChange={(e) => setRemarks(e.target.value)}
-                  placeholder="Add verification notes or reason for rejection…"
+                  placeholder="Add verification notes or reason for rejection..."
                   className="text-xs min-h-[72px] resize-none"
                 />
               </div>
@@ -539,10 +672,10 @@ export default function ApproverDashboard() {
               <div className="flex gap-2 pt-1">
                 <Button
                   className="flex-1 bg-success/15 text-success hover:bg-success/25 border border-success/20 shadow-none"
-                  disabled={Boolean(acting[viewing.id])}
-                  onClick={() => act(viewing.id, "approving")}
+                  disabled={Boolean(acting[viewing.requestId]) || isPending}
+                  onClick={() => handleApprove(viewing.requestId)}
                 >
-                  {acting[viewing.id] === "approving" ? (
+                  {acting[viewing.requestId] === "approving" ? (
                     <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
                   ) : (
                     <CheckCircle2 className="h-4 w-4 mr-1.5" />
@@ -552,10 +685,10 @@ export default function ApproverDashboard() {
                 <Button
                   variant="ghost"
                   className="flex-1 text-destructive hover:bg-destructive/10 border border-destructive/20"
-                  disabled={Boolean(acting[viewing.id])}
-                  onClick={() => act(viewing.id, "rejecting")}
+                  disabled={Boolean(acting[viewing.requestId]) || isPending}
+                  onClick={() => handleReject(viewing.requestId)}
                 >
-                  {acting[viewing.id] === "rejecting" ? (
+                  {acting[viewing.requestId] === "rejecting" ? (
                     <Loader2 className="h-4 w-4 animate-spin mr-1.5" />
                   ) : (
                     <XCircle className="h-4 w-4 mr-1.5" />

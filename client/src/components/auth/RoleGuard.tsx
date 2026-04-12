@@ -48,7 +48,7 @@ export function RoleGuard({
   }
 
   if (requireRegistered && !isRegistered) {
-    return <Navigate to="/identity" replace />;
+    return <Navigate to="/register-user" replace />;
   }
 
   if (allowedRoles && (!role || !allowedRoles.includes(role))) {

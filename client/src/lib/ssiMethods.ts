@@ -37,7 +37,11 @@ export const ssiMethods = {
   approveClaimRequest:
     "function approveClaimRequest(string requestId,string approverDid)",
   rejectClaimRequest:
-    "function rejectClaimRequest(string requestId,string approverDid)",
+    "function rejectClaimRequest(string requestId)",
+  submitApproval:
+    "function submitApproval(string requestId,bytes signature)",
+  getMessageHash:
+    "function getMessageHash(string requestId,string claimId,string citizenDid) view returns (bytes32)",
 
   submitVerification: `function submitVerification(${VERIFICATION_TUPLE} verification)`,
   getVerificationsForRequest: `function getVerificationsForRequest(string requestId) view returns (${VERIFICATION_TUPLE}[])`,
@@ -58,6 +62,14 @@ export const ssiMethods = {
     "function verifyPresentation(string presentationId) view returns (bool)",
 
   getApprovals: `function getApprovals(string requestId) view returns (${APPROVAL_TUPLE}[])`,
+
+  // Governance helpers
+  getApproverAddresses:
+    "function getApproverAddresses() view returns (address[])",
+  getAllRequestIds:
+    "function getAllRequestIds() view returns (string[])",
+  assignApproversToRequest:
+    "function assignApproversToRequest(string requestId,string[] _approverDids)",
 } as const;
 
 export type SSIMethodName = keyof typeof ssiMethods;
