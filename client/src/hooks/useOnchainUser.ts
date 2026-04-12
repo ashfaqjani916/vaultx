@@ -1,11 +1,20 @@
 import { useMemo } from "react";
 import { useSSIContract, useSSIReadByName } from "@/hooks/useSSIContract";
-import { parseSsiUser, roleIndexToUserRole, type OnchainUserRole } from "@/lib/ssiParsers";
+import { roleIndexToUserRole, type OnchainUserRole, type SsiUser } from "@/lib/ssiParsers";
+import { useReadContract } from "thirdweb/react";
+import { getContract } from "thirdweb";
+import { ssiChain, ssiContractAddress, thirdwebClient } from "@/lib/thirdweb";
 
 export function useOnchainUser() {
   const { account, isConfigured, isConnected } = useSSIContract();
   const address = account?.address;
-  const deterministicDid = address ? `did:ssi:${address.toLowerCase()}` : "";
+  const zeroAddress = "0x0000000000000000000000000000000000000000";
+
+  const contract = getContract({
+    client: thirdwebClient,
+    chain: ssiChain,
+    address: ssiContractAddress,
+  });
 
   const didByAddressQuery = useSSIReadByName("userAddressToDId", address ? [address] : [], {
     enabled: Boolean(address),
@@ -13,23 +22,44 @@ export function useOnchainUser() {
 
   const mappedDid = ((didByAddressQuery.data as string | undefined) ?? "").trim();
 
-  const mappedUserQuery = useSSIReadByName("getUser", [mappedDid], {
-    enabled: mappedDid.length > 0,
+  const publicUserQuery = useReadContract({
+    contract,
+    method:
+      "function getUser(address userAddress) view returns ((string did, address wallet, uint8 role, bool active, bool isApproved, string revokedByDid))",
+    params: [address ?? zeroAddress],
+    queryOptions: {
+      enabled: Boolean(address),
+    },
   });
 
-  const fallbackUserQuery = useSSIReadByName("getUser", [deterministicDid], {
-    enabled: deterministicDid.length > 0,
-  });
+  const user = useMemo<SsiUser | null>(() => {
+    const raw = publicUserQuery.data as Record<string, unknown> | undefined;
+    if (!raw) return null;
 
-  const user = useMemo(() => {
-    const mappedParsed = mappedUserQuery.data ? parseSsiUser(mappedUserQuery.data) : null;
-    if (mappedParsed?.did) return mappedParsed;
+    const did = String(raw.did ?? raw[0] ?? "").trim();
+    if (!did) return null;
 
-    const fallbackParsed = fallbackUserQuery.data ? parseSsiUser(fallbackUserQuery.data) : null;
-    if (fallbackParsed?.did) return fallbackParsed;
+    const wallet = String(raw.wallet ?? raw[1] ?? address ?? "");
+    const role = Number(raw.role ?? raw[2] ?? 0);
+    const active = Boolean(raw.active ?? raw[3] ?? false);
+    const isApproved = Boolean(raw.isApproved ?? raw[4] ?? false);
+    const revokedByDid = String(raw.revokedByDid ?? raw[5] ?? "");
 
-    return null;
-  }, [fallbackUserQuery.data, mappedUserQuery.data]);
+    return {
+      did,
+      signingPublicKey: "",
+      encryptionPublicKey: "",
+      wallet,
+      role,
+      active,
+      isApproved,
+      createdAt: 0n,
+      updatedAt: 0n,
+      revokedAt: 0n,
+      createdByDid: "",
+      revokedByDid,
+    };
+  }, [publicUserQuery.data, address]);
 
   const role = useMemo<OnchainUserRole | null>(() => {
     if (!user) return null;
@@ -39,7 +69,7 @@ export function useOnchainUser() {
   return {
     account,
     address,
-    did: user?.did ?? mappedDid ?? deterministicDid,
+    did: user?.did ?? mappedDid,
     user,
     role,
     isConfigured,
@@ -47,12 +77,10 @@ export function useOnchainUser() {
     isRegistered: Boolean(user?.did),
     // Use initial-load flags only. `isFetching` can stay true during background refetches.
     isLoading:
-      Boolean(address) &&
-      (fallbackUserQuery.isLoading || (mappedDid.length > 0 && mappedUserQuery.isLoading)),
+      Boolean(address) && (didByAddressQuery.isLoading || publicUserQuery.isLoading),
     refetch: async () => {
       await didByAddressQuery.refetch();
-      await mappedUserQuery.refetch();
-      await fallbackUserQuery.refetch();
+      await publicUserQuery.refetch();
     },
   };
 }

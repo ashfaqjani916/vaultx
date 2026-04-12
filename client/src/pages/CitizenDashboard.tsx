@@ -1,224 +1,184 @@
-import { useState, useRef, useCallback, useMemo } from "react";
-import { Link } from "react-router-dom";
-import { motion, AnimatePresence } from "framer-motion";
-import {
-  Hexagon,
-  Upload,
-  FileText,
-  FileImage,
-  File,
-  X,
-  CheckCircle2,
-  Clock,
-  Shield,
-  Plus,
-  Eye,
-  Fingerprint,
-  AlertCircle,
-  FolderOpen,
-  Loader2,
-  Hash,
-  Award,
-} from "lucide-react";
-import { Card } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { StatusBadge } from "@/components/StatusBadge";
-import { Progress } from "@/components/ui/progress";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { toast } from "@/hooks/use-toast";
-import { useOnchainUser } from "@/hooks/useOnchainUser";
-import { useOnchainClaimDefinitions } from "@/hooks/useOnchainClaimDefinitions";
-import { useOnchainClaimRequests } from "@/hooks/useOnchainClaimRequests";
-import { useOnchainCredentials } from "@/hooks/useOnchainCredentials";
-import { useSSIWrite } from "@/hooks/useSSIContract";
-import { claimRequestStatusLabel, credentialStatusLabel } from "@/lib/ssiParsers";
-import { getCategoryByClaimType, type DocumentCategory } from "@/lib/documentCategories";
-import { uploadToIPFS } from "@/lib/ipfs";
+import { useState, useRef, useCallback, useMemo } from 'react'
+import { Link } from 'react-router-dom'
+import { motion, AnimatePresence } from 'framer-motion'
+import { Hexagon, Upload, FileText, FileImage, File, X, CheckCircle2, Clock, Shield, Plus, Eye, Fingerprint, AlertCircle, FolderOpen, Loader2, Hash, Award } from 'lucide-react'
+import { Card } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { StatusBadge } from '@/components/StatusBadge'
+import { Progress } from '@/components/ui/progress'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { toast } from '@/hooks/use-toast'
+import { useOnchainUser } from '@/hooks/useOnchainUser'
+import { useOnchainClaimDefinitions } from '@/hooks/useOnchainClaimDefinitions'
+import { useOnchainClaimRequests } from '@/hooks/useOnchainClaimRequests'
+import { useOnchainCredentials } from '@/hooks/useOnchainCredentials'
+import { useSSIWrite } from '@/hooks/useSSIContract'
+import { claimRequestStatusLabel, credentialStatusLabel } from '@/lib/ssiParsers'
+import { getCategoryByClaimType, type DocumentCategory } from '@/lib/documentCategories'
+import { uploadToIPFS } from '@/lib/ipfs'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function formatBytes(bytes: number): string {
-  if (bytes === 0) return "0 B";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes === 0) return '0 B'
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-function FileIcon({ name, size = "sm" }: { name: string; size?: "sm" | "md" }) {
-  const ext = name.split(".").pop()?.toLowerCase() ?? "";
-  const cls = size === "md" ? "h-5 w-5" : "h-4 w-4";
-  if (["jpg", "jpeg", "png", "gif", "webp", "svg"].includes(ext))
-    return <FileImage className={`${cls} text-blue-400`} />;
-  if (ext === "pdf") return <FileText className={`${cls} text-red-400`} />;
-  return <File className={`${cls} text-muted-foreground`} />;
+function FileIcon({ name, size = 'sm' }: { name: string; size?: 'sm' | 'md' }) {
+  const ext = name.split('.').pop()?.toLowerCase() ?? ''
+  const cls = size === 'md' ? 'h-5 w-5' : 'h-4 w-4'
+  if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(ext)) return <FileImage className={`${cls} text-blue-400`} />
+  if (ext === 'pdf') return <FileText className={`${cls} text-red-400`} />
+  return <File className={`${cls} text-muted-foreground`} />
 }
 
 const cardAnim = (i: number) => ({
   initial: { opacity: 0, y: 10 },
   animate: { opacity: 1, y: 0 },
   transition: { duration: 0.28, delay: i * 0.07 },
-});
+})
 
 // ── Component ─────────────────────────────────────────────────────────────────
 export default function CitizenDashboard() {
-  const { did, isRegistered, isConnected } = useOnchainUser();
-  const { definitions, isLoading: defsLoading } = useOnchainClaimDefinitions();
-  const { requests, addRequestId, refetchAll: refetchRequests } = useOnchainClaimRequests();
-  const { credentials } = useOnchainCredentials(did);
-  const { writeByName, isPending } = useSSIWrite();
+  const { did, user, isConnected } = useOnchainUser()
+  const isApproved = Boolean(user?.isApproved)
 
-  const activeDefs = useMemo(() => definitions.filter((d) => d.status === 1), [definitions]);
-  const myRequests = useMemo(() => requests.filter((r) => r.citizenDid === did), [requests, did]);
-  const activeCredentials = useMemo(() => credentials.filter((c) => c.status === 0), [credentials]);
+  const { definitions, isLoading: defsLoading } = useOnchainClaimDefinitions()
+  const { requests, addRequestId, refetchAll: refetchRequests } = useOnchainClaimRequests()
+  const { credentials } = useOnchainCredentials(did)
+  const { writeByName, isPending } = useSSIWrite()
+
+  const activeDefs = useMemo(() => definitions.filter((d) => d.status === 1), [definitions])
+  const myRequests = useMemo(() => requests.filter((r) => r.citizenDid === did), [requests, did])
+  const activeCredentials = useMemo(() => credentials.filter((c) => c.status === 0), [credentials])
 
   // ── Upload modal state ──────────────────────────────────────────────────
-  const [uploadOpen, setUploadOpen] = useState(false);
-  const [selectedClaimId, setSelectedClaimId] = useState("");
-  const [file, setFile] = useState<File | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
-  const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [isUploading, setIsUploading] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploadOpen, setUploadOpen] = useState(false)
+  const [selectedClaimId, setSelectedClaimId] = useState('')
+  const [file, setFile] = useState<File | null>(null)
+  const [isDragging, setIsDragging] = useState(false)
+  const [fieldValues, setFieldValues] = useState<Record<string, string>>({})
+  const [uploadProgress, setUploadProgress] = useState(0)
+  const [isUploading, setIsUploading] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Get the document category for the selected claim type
-  const selectedDef = activeDefs.find((d) => d.claimId === selectedClaimId);
-  const category: DocumentCategory | undefined = selectedDef
-    ? getCategoryByClaimType(selectedDef.claimType)
-    : undefined;
+  const selectedDef = activeDefs.find((d) => d.claimId === selectedClaimId)
+  const category: DocumentCategory | undefined = selectedDef ? getCategoryByClaimType(selectedDef.claimType) : undefined
 
   // ── Field handlers ──────────────────────────────────────────────────────
-  const setField = (key: string, value: string) =>
-    setFieldValues((prev) => ({ ...prev, [key]: value }));
+  const setField = (key: string, value: string) => setFieldValues((prev) => ({ ...prev, [key]: value }))
 
   // ── Drag-and-drop handlers ──────────────────────────────────────────────
   const handleDragOver = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(true);
-  }, []);
+    e.preventDefault()
+    setIsDragging(true)
+  }, [])
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-  }, []);
+    e.preventDefault()
+    setIsDragging(false)
+  }, [])
 
   const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-    const dropped = e.dataTransfer.files[0];
-    if (dropped) setFile(dropped);
-  }, []);
+    e.preventDefault()
+    setIsDragging(false)
+    const dropped = e.dataTransfer.files[0]
+    if (dropped) setFile(dropped)
+  }, [])
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files?.[0]) return;
-    setFile(e.target.files[0]);
-    e.target.value = "";
-  };
+    if (!e.target.files?.[0]) return
+    setFile(e.target.files[0])
+    e.target.value = ''
+  }
 
   const closeModal = () => {
-    if (isUploading) return;
-    setUploadOpen(false);
-    setFile(null);
-    setSelectedClaimId("");
-    setFieldValues({});
-    setUploadProgress(0);
-  };
+    if (isUploading) return
+    setUploadOpen(false)
+    setFile(null)
+    setSelectedClaimId('')
+    setFieldValues({})
+    setUploadProgress(0)
+  }
 
   // ── Upload & Submit ─────────────────────────────────────────────────────
   const handleUpload = async () => {
-    if (!file || !selectedClaimId || !did) return;
+    if (!isApproved) return
+    if (!file || !selectedClaimId || !did) return
 
     // Validate required fields
     if (category) {
-      const missing = category.fields
-        .filter((f) => f.required && !fieldValues[f.key]?.trim())
-        .map((f) => f.label);
+      const missing = category.fields.filter((f) => f.required && !fieldValues[f.key]?.trim()).map((f) => f.label)
       if (missing.length > 0) {
         toast({
-          title: "Missing required fields",
-          description: missing.join(", "),
-          variant: "destructive",
-        });
-        return;
+          title: 'Missing required fields',
+          description: missing.join(', '),
+          variant: 'destructive',
+        })
+        return
       }
     }
 
-    setIsUploading(true);
-    setUploadProgress(10);
+    setIsUploading(true)
+    setUploadProgress(10)
 
     try {
       // Step 1: Upload to IPFS
-      setUploadProgress(20);
-      const { metadataCid } = await uploadToIPFS(file, fieldValues);
-      setUploadProgress(60);
+      setUploadProgress(20)
+      const { metadataCid } = await uploadToIPFS(file, fieldValues)
+      setUploadProgress(60)
 
       // Step 2: Submit claim request on-chain
-      const requestId = `req-${Date.now()}-${did.slice(-6)}`;
-      const now = BigInt(Math.floor(Date.now() / 1000));
+      const requestId = `req-${Date.now()}-${did.slice(-6)}`
+      const now = BigInt(Math.floor(Date.now() / 1000))
 
-      await writeByName("createClaimRequest", [
+      await writeByName('createClaimRequest', [
         {
           requestId,
           claimId: selectedClaimId,
           citizenDid: did,
           documentHash: metadataCid,
-          photoHash: "",
-          geolocationHash: "",
-          biometricHash: "",
+          photoHash: '',
+          geolocationHash: '',
+          biometricHash: '',
           status: 0,
           approverDids: [],
-          finalApproverDid: "",
+          finalApproverDid: '',
           createdAt: now,
           updatedAt: now,
           expiresAt: now + BigInt(30 * 24 * 60 * 60),
         },
-      ]);
+      ])
 
-      setUploadProgress(100);
-      addRequestId(requestId);
+      setUploadProgress(100)
+      addRequestId(requestId)
 
       toast({
-        title: "Document submitted",
+        title: 'Document submitted',
         description: `Request ${requestId} created. IPFS CID: ${metadataCid.slice(0, 16)}...`,
-      });
+      })
 
-      await new Promise((r) => setTimeout(r, 400));
-      closeModal();
-      refetchRequests();
+      await new Promise((r) => setTimeout(r, 400))
+      closeModal()
+      refetchRequests()
     } catch (err) {
       toast({
-        title: "Submission failed",
-        description: err instanceof Error ? err.message : "Transaction failed",
-        variant: "destructive",
-      });
+        title: 'Submission failed',
+        description: err instanceof Error ? err.message : 'Transaction failed',
+        variant: 'destructive',
+      })
     } finally {
-      setIsUploading(false);
-      setUploadProgress(0);
+      setIsUploading(false)
+      setUploadProgress(0)
     }
-  };
+  }
 
   if (!isConnected) {
     return (
@@ -226,17 +186,13 @@ export default function CitizenDashboard() {
         <Card className="p-8 text-center max-w-md">
           <Hexagon className="h-10 w-10 text-primary mx-auto mb-3" />
           <p className="text-sm font-medium mb-2">Wallet not connected</p>
-          <p className="text-xs text-muted-foreground mb-4">
-            Connect your wallet to access the citizen dashboard.
-          </p>
+          <p className="text-xs text-muted-foreground mb-4">Connect your wallet to access the citizen dashboard.</p>
           <Link to="/">
-            <Button className="gradient-primary text-primary-foreground">
-              Go to Login
-            </Button>
+            <Button className="gradient-primary text-primary-foreground">Go to Login</Button>
           </Link>
         </Card>
       </div>
-    );
+    )
   }
 
   return (
@@ -248,9 +204,7 @@ export default function CitizenDashboard() {
             <Hexagon className="h-4 w-4 text-primary-foreground" />
           </div>
           <span className="text-lg font-bold tracking-tight">VaultX</span>
-          <span className="text-[11px] bg-primary/10 text-primary px-2 py-0.5 rounded-full font-semibold ml-1 tracking-wide">
-            CITIZEN
-          </span>
+          <span className="text-[11px] bg-primary/10 text-primary px-2 py-0.5 rounded-full font-semibold ml-1 tracking-wide">CITIZEN</span>
         </div>
         <Link to="/">
           <Button variant="ghost" size="sm" className="text-xs text-muted-foreground">
@@ -263,40 +217,31 @@ export default function CitizenDashboard() {
       <div className="flex-1 p-6">
         <div className="max-w-5xl mx-auto space-y-8">
           {/* Page header */}
-          <motion.div
-            initial={{ opacity: 0, y: -8 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.3 }}
-            className="flex flex-col sm:flex-row sm:items-center justify-between gap-4"
-          >
+          <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }} className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
               <h1 className="text-2xl font-bold tracking-tight">Identity Wallet</h1>
-              <p className="text-sm text-muted-foreground mt-0.5">
-                Upload documents and manage your verifiable credentials
-              </p>
+              <p className="text-sm text-muted-foreground mt-0.5">Upload documents and manage your verifiable credentials</p>
             </div>
-            <Button
-              onClick={() => setUploadOpen(true)}
-              disabled={!isRegistered || activeDefs.length === 0}
-              className="gradient-primary text-primary-foreground text-sm font-semibold shrink-0"
-            >
+            <Button onClick={() => setUploadOpen(true)} disabled={!isApproved} className="gradient-primary text-primary-foreground text-sm font-semibold shrink-0">
               <Plus className="h-4 w-4 mr-1.5" />
               Upload Document
             </Button>
           </motion.div>
 
-          {!isRegistered && (
+          {!isApproved && (
             <Card className="p-4 border-warning/40 bg-warning/5 text-sm text-warning">
-              You must register your identity before uploading documents. Visit the{" "}
-              <Link to="/identity" className="underline">
-                Identity Wallet
-              </Link>
-              .
+              Your account is not approved yet. Upload and document actions are disabled until governance approval is completed.
+            </Card>
+          )}
+
+          {isApproved && activeDefs.length === 0 && (
+            <Card className="p-4 border-warning/40 bg-warning/5 text-sm text-warning">
+              No active document types are configured yet. Ask governance to activate at least one claim type before submitting documents.
             </Card>
           )}
 
           {/* DID card */}
-          {isRegistered && (
+          {did && (
             <motion.div {...cardAnim(0)}>
               <Card className="p-5 shadow-card border-border bg-card">
                 <div className="flex items-start justify-between flex-wrap gap-4">
@@ -305,12 +250,8 @@ export default function CitizenDashboard() {
                       <Fingerprint className="h-6 w-6 text-primary-foreground" />
                     </div>
                     <div>
-                      <p className="text-[11px] text-muted-foreground font-medium uppercase tracking-widest mb-0.5">
-                        Decentralized Identifier
-                      </p>
-                      <code className="text-xs font-mono text-card-foreground break-all">
-                        {did}
-                      </code>
+                      <p className="text-[11px] text-muted-foreground font-medium uppercase tracking-widest mb-0.5">Decentralized Identifier</p>
+                      <code className="text-xs font-mono text-card-foreground break-all">{did}</code>
                     </div>
                   </div>
                   <div className="flex items-center gap-4">
@@ -333,13 +274,11 @@ export default function CitizenDashboard() {
                   <Award className="h-4 w-4 text-primary" />
                   My Credentials
                 </h2>
-                <span className="text-xs text-muted-foreground">
-                  {activeCredentials.length} active
-                </span>
+                <span className="text-xs text-muted-foreground">{activeCredentials.length} active</span>
               </div>
               <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 {activeCredentials.map((cred, i) => {
-                  const claimDef = definitions.find((d) => d.claimId === cred.claimId);
+                  const claimDef = definitions.find((d) => d.claimId === cred.claimId)
                   return (
                     <motion.div key={cred.credentialId} {...cardAnim(i)}>
                       <Card className="p-4 shadow-card border-border bg-card hover:shadow-elevated transition-shadow">
@@ -349,24 +288,15 @@ export default function CitizenDashboard() {
                           </div>
                           <StatusBadge status={credentialStatusLabel(cred.status)} />
                         </div>
-                        <p className="text-xs font-semibold text-card-foreground mb-0.5">
-                          {claimDef?.claimType || cred.claimId}
-                        </p>
+                        <p className="text-xs font-semibold text-card-foreground mb-0.5">{claimDef?.claimType || cred.claimId}</p>
                         <div className="flex items-center gap-1.5 mt-2">
                           <Hash className="h-3 w-3 text-muted-foreground/60 shrink-0" />
-                          <code className="text-[10px] font-mono text-muted-foreground truncate">
-                            {cred.credentialId}
-                          </code>
+                          <code className="text-[10px] font-mono text-muted-foreground truncate">{cred.credentialId}</code>
                         </div>
-                        <p className="text-[10px] text-muted-foreground mt-1">
-                          Issued{" "}
-                          {cred.issuedAt > 0n
-                            ? new Date(Number(cred.issuedAt) * 1000).toLocaleDateString()
-                            : "—"}
-                        </p>
+                        <p className="text-[10px] text-muted-foreground mt-1">Issued {cred.issuedAt > 0n ? new Date(Number(cred.issuedAt) * 1000).toLocaleDateString() : '—'}</p>
                       </Card>
                     </motion.div>
-                  );
+                  )
                 })}
               </div>
             </motion.div>
@@ -379,9 +309,7 @@ export default function CitizenDashboard() {
                 <Eye className="h-4 w-4 text-primary" />
                 My Document Requests
               </h2>
-              <span className="text-xs text-muted-foreground">
-                {myRequests.length} requests
-              </span>
+              <span className="text-xs text-muted-foreground">{myRequests.length} requests</span>
             </div>
 
             <Card className="shadow-card border-border bg-card overflow-hidden">
@@ -401,63 +329,38 @@ export default function CitizenDashboard() {
                     <TableRow>
                       <TableCell colSpan={6} className="text-center py-10">
                         <Shield className="h-8 w-8 text-muted-foreground/20 mx-auto mb-2" />
-                        <p className="text-xs text-muted-foreground">
-                          No documents uploaded yet. Click "Upload Document" to get started.
-                        </p>
+                        <p className="text-xs text-muted-foreground">No documents uploaded yet. Click "Upload Document" to get started.</p>
                       </TableCell>
                     </TableRow>
                   ) : (
                     myRequests.map((req) => {
-                      const claimDef = definitions.find((d) => d.claimId === req.claimId);
+                      const claimDef = definitions.find((d) => d.claimId === req.claimId)
                       return (
                         <TableRow key={req.requestId} className="hover:bg-muted/30 transition-colors">
-                          <TableCell className="text-xs font-mono text-muted-foreground">
-                            {req.requestId}
-                          </TableCell>
-                          <TableCell className="text-xs font-medium">
-                            {claimDef?.claimType || req.claimId}
-                          </TableCell>
-                          <TableCell className="text-xs font-mono text-muted-foreground max-w-[120px] truncate">
-                            {req.documentHash ? `${req.documentHash.slice(0, 16)}...` : "—"}
-                          </TableCell>
-                          <TableCell className="text-xs text-muted-foreground">
-                            {req.createdAt > 0n
-                              ? new Date(Number(req.createdAt) * 1000).toLocaleDateString()
-                              : "—"}
-                          </TableCell>
+                          <TableCell className="text-xs font-mono text-muted-foreground">{req.requestId}</TableCell>
+                          <TableCell className="text-xs font-medium">{claimDef?.claimType || req.claimId}</TableCell>
+                          <TableCell className="text-xs font-mono text-muted-foreground max-w-[120px] truncate">{req.documentHash ? `${req.documentHash.slice(0, 16)}...` : '—'}</TableCell>
+                          <TableCell className="text-xs text-muted-foreground">{req.createdAt > 0n ? new Date(Number(req.createdAt) * 1000).toLocaleDateString() : '—'}</TableCell>
                           <TableCell className="text-xs">
                             {req.approverDids.length > 0 ? (
                               <div className="flex items-center gap-2">
                                 <div className="w-16">
-                                  <Progress
-                                    value={
-                                      claimDef
-                                        ? (req.approverDids.length /
-                                            Number(claimDef.numberOfApprovalsNeeded || 1)) *
-                                          100
-                                        : 0
-                                    }
-                                    className="h-1.5"
-                                  />
+                                  <Progress value={claimDef ? (req.approverDids.length / Number(claimDef.numberOfApprovalsNeeded || 1)) * 100 : 0} className="h-1.5" />
                                 </div>
                                 <span className="text-[10px] text-muted-foreground">
                                   {req.approverDids.length}
-                                  {claimDef
-                                    ? `/${Number(claimDef.numberOfApprovalsNeeded)}`
-                                    : ""}
+                                  {claimDef ? `/${Number(claimDef.numberOfApprovalsNeeded)}` : ''}
                                 </span>
                               </div>
                             ) : (
-                              <span className="text-muted-foreground/50 text-[10px]">
-                                Awaiting assignment
-                              </span>
+                              <span className="text-muted-foreground/50 text-[10px]">Awaiting assignment</span>
                             )}
                           </TableCell>
                           <TableCell>
                             <StatusBadge status={claimRequestStatusLabel(req.status)} />
                           </TableCell>
                         </TableRow>
-                      );
+                      )
                     })
                   )}
                 </TableBody>
@@ -471,7 +374,7 @@ export default function CitizenDashboard() {
       <Dialog
         open={uploadOpen}
         onOpenChange={(o) => {
-          if (!o) closeModal();
+          if (!o) closeModal()
         }}
       >
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
@@ -481,9 +384,7 @@ export default function CitizenDashboard() {
               Upload Document
             </DialogTitle>
             <DialogDescription>
-              Select a document type, fill in the credential fields, and upload the
-              supporting document. The file is stored on IPFS and the hash is
-              recorded on-chain.
+              Select a document type, fill in the credential fields, and upload the supporting document. The file is stored on IPFS and the hash is recorded on-chain.
             </DialogDescription>
           </DialogHeader>
 
@@ -499,17 +400,13 @@ export default function CitizenDashboard() {
                 <Select
                   value={selectedClaimId}
                   onValueChange={(v) => {
-                    setSelectedClaimId(v);
-                    setFieldValues({});
+                    setSelectedClaimId(v)
+                    setFieldValues({})
                   }}
                   disabled={isUploading}
                 >
                   <SelectTrigger>
-                    <SelectValue
-                      placeholder={
-                        activeDefs.length ? "Select document type..." : "No active claim types"
-                      }
-                    />
+                    <SelectValue placeholder={activeDefs.length ? 'Select document type...' : 'No active claim types'} />
                   </SelectTrigger>
                   <SelectContent>
                     {activeDefs.map((d) => (
@@ -524,32 +421,18 @@ export default function CitizenDashboard() {
 
             {/* Dynamic credential fields */}
             {category && (
-              <motion.div
-                initial={{ opacity: 0, height: 0 }}
-                animate={{ opacity: 1, height: "auto" }}
-                className="space-y-3"
-              >
-                <Label className="text-xs font-semibold block">
-                  {category.name} — Credential Fields
-                </Label>
-                <p className="text-[11px] text-muted-foreground -mt-1">
-                  {category.description}
-                </p>
+              <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="space-y-3">
+                <Label className="text-xs font-semibold block">{category.name} — Credential Fields</Label>
+                <p className="text-[11px] text-muted-foreground -mt-1">{category.description}</p>
                 <div className="grid gap-3">
                   {category.fields.map((field) => (
                     <div key={field.key}>
                       <Label className="text-xs mb-1 block">
                         {field.label}
-                        {field.required && (
-                          <span className="text-destructive ml-0.5">*</span>
-                        )}
+                        {field.required && <span className="text-destructive ml-0.5">*</span>}
                       </Label>
-                      {field.type === "select" && field.options ? (
-                        <Select
-                          value={fieldValues[field.key] || ""}
-                          onValueChange={(v) => setField(field.key, v)}
-                          disabled={isUploading}
-                        >
+                      {field.type === 'select' && field.options ? (
+                        <Select value={fieldValues[field.key] || ''} onValueChange={(v) => setField(field.key, v)} disabled={isUploading}>
                           <SelectTrigger className="h-9">
                             <SelectValue placeholder={`Select ${field.label.toLowerCase()}`} />
                           </SelectTrigger>
@@ -563,9 +446,9 @@ export default function CitizenDashboard() {
                         </Select>
                       ) : (
                         <Input
-                          type={field.type === "date" ? "date" : "text"}
+                          type={field.type === 'date' ? 'date' : 'text'}
                           className="h-9 text-xs"
-                          value={fieldValues[field.key] || ""}
+                          value={fieldValues[field.key] || ''}
                           onChange={(e) => setField(field.key, e.target.value)}
                           placeholder={field.placeholder || `Enter ${field.label.toLowerCase()}`}
                           disabled={isUploading}
@@ -580,9 +463,7 @@ export default function CitizenDashboard() {
             {/* No matching category fallback */}
             {selectedClaimId && !category && (
               <div className="rounded-lg bg-muted/50 border border-border p-3">
-                <p className="text-xs text-muted-foreground">
-                  No specific fields for this claim type. Upload the supporting document below.
-                </p>
+                <p className="text-xs text-muted-foreground">No specific fields for this claim type. Upload the supporting document below.</p>
               </div>
             )}
 
@@ -596,41 +477,18 @@ export default function CitizenDashboard() {
                   onDrop={handleDrop}
                   onClick={() => !isUploading && fileInputRef.current?.click()}
                   className={[
-                    "relative border-2 border-dashed rounded-xl p-6 text-center transition-all",
-                    isUploading ? "opacity-50 cursor-not-allowed border-border" : "cursor-pointer",
-                    isDragging
-                      ? "border-primary bg-primary/8 scale-[1.01]"
-                      : "border-border hover:border-primary/50 hover:bg-muted/30",
-                  ].join(" ")}
+                    'relative border-2 border-dashed rounded-xl p-6 text-center transition-all',
+                    isUploading ? 'opacity-50 cursor-not-allowed border-border' : 'cursor-pointer',
+                    isDragging ? 'border-primary bg-primary/8 scale-[1.01]' : 'border-border hover:border-primary/50 hover:bg-muted/30',
+                  ].join(' ')}
                 >
-                  <input
-                    ref={fileInputRef}
-                    type="file"
-                    className="hidden"
-                    onChange={handleFileInput}
-                    accept=".pdf,.jpg,.jpeg,.png,.doc,.docx"
-                    disabled={isUploading}
-                  />
+                  <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileInput} accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" disabled={isUploading} />
                   <div className="flex flex-col items-center gap-2 pointer-events-none">
-                    <div
-                      className={[
-                        "h-12 w-12 rounded-xl flex items-center justify-center transition-colors",
-                        isDragging ? "bg-primary/15" : "bg-muted",
-                      ].join(" ")}
-                    >
-                      <FolderOpen
-                        className={[
-                          "h-6 w-6 transition-colors",
-                          isDragging ? "text-primary" : "text-muted-foreground",
-                        ].join(" ")}
-                      />
+                    <div className={['h-12 w-12 rounded-xl flex items-center justify-center transition-colors', isDragging ? 'bg-primary/15' : 'bg-muted'].join(' ')}>
+                      <FolderOpen className={['h-6 w-6 transition-colors', isDragging ? 'text-primary' : 'text-muted-foreground'].join(' ')} />
                     </div>
-                    <p className="text-sm font-medium text-card-foreground">
-                      {isDragging ? "Drop file here" : "Drag & drop or click to browse"}
-                    </p>
-                    <p className="text-[10px] text-muted-foreground">
-                      PDF, JPG, PNG, DOC - Max 10 MB
-                    </p>
+                    <p className="text-sm font-medium text-card-foreground">{isDragging ? 'Drop file here' : 'Drag & drop or click to browse'}</p>
+                    <p className="text-[10px] text-muted-foreground">PDF, JPG, PNG, DOC - Max 10 MB</p>
                   </div>
                 </div>
               </div>
@@ -647,18 +505,14 @@ export default function CitizenDashboard() {
                 >
                   <FileIcon name={file.name} />
                   <div className="flex-1 min-w-0">
-                    <p className="text-xs font-medium text-card-foreground truncate">
-                      {file.name}
-                    </p>
-                    <p className="text-[10px] text-muted-foreground">
-                      {formatBytes(file.size)}
-                    </p>
+                    <p className="text-xs font-medium text-card-foreground truncate">{file.name}</p>
+                    <p className="text-[10px] text-muted-foreground">{formatBytes(file.size)}</p>
                   </div>
                   {!isUploading && (
                     <button
                       onClick={(e) => {
-                        e.stopPropagation();
-                        setFile(null);
+                        e.stopPropagation()
+                        setFile(null)
                       }}
                       className="text-muted-foreground hover:text-destructive transition-colors shrink-0 p-0.5 rounded"
                     >
@@ -672,20 +526,9 @@ export default function CitizenDashboard() {
             {/* Upload progress */}
             <AnimatePresence>
               {isUploading && (
-                <motion.div
-                  initial={{ opacity: 0, y: -4 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={{ opacity: 0 }}
-                  className="space-y-2"
-                >
+                <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="space-y-2">
                   <div className="flex justify-between text-xs text-muted-foreground">
-                    <span>
-                      {uploadProgress < 30
-                        ? "Uploading to IPFS..."
-                        : uploadProgress < 70
-                          ? "Submitting on-chain..."
-                          : "Finalizing..."}
-                    </span>
+                    <span>{uploadProgress < 30 ? 'Uploading to IPFS...' : uploadProgress < 70 ? 'Submitting on-chain...' : 'Finalizing...'}</span>
                     <span>{uploadProgress}%</span>
                   </div>
                   <Progress value={uploadProgress} className="h-1.5" />
@@ -697,28 +540,17 @@ export default function CitizenDashboard() {
             <div className="flex items-start gap-2 bg-primary/5 border border-primary/15 rounded-lg px-3 py-2.5">
               <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0 text-primary" />
               <p className="text-[11px] text-muted-foreground leading-relaxed">
-                Your document is uploaded to IPFS and the CID is recorded on-chain.
-                Governance will assign approvers to verify your submission. Once
-                verified, the document is removed from IPFS and a credential is
-                issued to your identity.
+                Your document is uploaded to IPFS and the CID is recorded on-chain. Governance will assign approvers to verify your submission. Once verified, the document is removed from IPFS and a
+                credential is issued to your identity.
               </p>
             </div>
 
             {/* Actions */}
             <div className="flex gap-2 pt-1">
-              <Button
-                variant="outline"
-                className="flex-1"
-                onClick={closeModal}
-                disabled={isUploading}
-              >
+              <Button variant="outline" className="flex-1" onClick={closeModal} disabled={isUploading}>
                 Cancel
               </Button>
-              <Button
-                className="flex-1 gradient-primary text-primary-foreground"
-                disabled={!file || !selectedClaimId || isUploading || isPending}
-                onClick={handleUpload}
-              >
+              <Button className="flex-1 gradient-primary text-primary-foreground" disabled={!isApproved || !file || !selectedClaimId || isUploading || isPending} onClick={handleUpload}>
                 {isUploading ? (
                   <>
                     <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
@@ -736,5 +568,5 @@ export default function CitizenDashboard() {
         </DialogContent>
       </Dialog>
     </div>
-  );
+  )
 }

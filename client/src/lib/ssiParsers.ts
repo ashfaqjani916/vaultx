@@ -7,6 +7,7 @@ export type SsiUser = {
   wallet: string;
   role: number;
   active: boolean;
+  isApproved: boolean;
   createdAt: bigint;
   updatedAt: bigint;
   revokedAt: bigint;
@@ -65,11 +66,12 @@ export function parseSsiUser(raw: unknown): SsiUser {
     wallet: String(pick(raw, "wallet", 3, "")),
     role: Number(pick(raw, "role", 4, 0)),
     active: Boolean(pick(raw, "active", 5, false)),
-    createdAt: asBigInt(pick(raw, "createdAt", 6, 0n)),
-    updatedAt: asBigInt(pick(raw, "updatedAt", 7, 0n)),
-    revokedAt: asBigInt(pick(raw, "revokedAt", 8, 0n)),
-    createdByDid: String(pick(raw, "createdByDid", 9, "")),
-    revokedByDid: String(pick(raw, "revokedByDid", 10, "")),
+    isApproved: Boolean(pick(raw, "isApproved", 6, false)),
+    createdAt: asBigInt(pick(raw, "createdAt", 7, 0n)),
+    updatedAt: asBigInt(pick(raw, "updatedAt", 8, 0n)),
+    revokedAt: asBigInt(pick(raw, "revokedAt", 9, 0n)),
+    createdByDid: String(pick(raw, "createdByDid", 10, "")),
+    revokedByDid: String(pick(raw, "revokedByDid", 11, "")),
   };
 }
 
