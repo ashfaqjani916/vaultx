@@ -50,7 +50,7 @@ export default function Login() {
     }
 
     if (role === 2) {
-      navigate('/dashboard/verifyer', { replace: true }) // sample: verifier route placeholder
+      navigate('/dashboard/verifier', { replace: true }) // sample: verifier route placeholder
       return
     }
 

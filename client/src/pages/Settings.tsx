@@ -1,3 +1,5 @@
+import { useNavigate } from "react-router-dom";
+import { LogOut } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -7,6 +9,7 @@ import { useOnchainUser } from "@/hooks/useOnchainUser";
 import { userRoleLabel } from "@/lib/ssiParsers";
 
 export default function SettingsPage() {
+  const navigate = useNavigate();
   const account = useActiveAccount();
   const activeWallet = useActiveWallet();
   const { disconnect } = useDisconnect();
@@ -39,12 +42,14 @@ export default function SettingsPage() {
             <Button
               variant="outline"
               size="sm"
-              className="mt-3 text-xs"
+              className="mt-3 text-xs gap-1.5"
               onClick={() => {
                 if (activeWallet) disconnect(activeWallet);
+                navigate("/", { replace: true });
               }}
             >
-              Disconnect Wallet
+              <LogOut className="h-3.5 w-3.5" />
+              Sign Out
             </Button>
           </div>
         )}

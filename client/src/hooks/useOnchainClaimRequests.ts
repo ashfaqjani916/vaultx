@@ -42,8 +42,6 @@ export function useOnchainClaimRequests() {
     queryOptions: { enabled: isConfigured },
   });
 
-  console.log(rawRequestIds)
-
   const requestIds = useMemo<string[]>(() => {
     if (!Array.isArray(rawRequestIds)) return [];
     return (rawRequestIds as unknown[]).map(String).filter(Boolean);

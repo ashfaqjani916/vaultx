@@ -1,10 +1,10 @@
 import { useState, useMemo } from 'react'
-import { Link } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { useQueries, useQueryClient } from '@tanstack/react-query'
-import { useActiveAccount, useReadContract, useSendAndConfirmTransaction } from 'thirdweb/react'
+import { useActiveAccount, useActiveWallet, useDisconnect, useSendAndConfirmTransaction } from 'thirdweb/react'
 import { getContract, prepareContractCall, readContract } from 'thirdweb'
 import { motion } from 'framer-motion'
-import { Hexagon, CheckCircle2, XCircle, Loader2, FileText, FileImage, File, Eye, ExternalLink, ClipboardList, Clock, Shield, AlertTriangle } from 'lucide-react'
+import { Hexagon, CheckCircle2, XCircle, Loader2, FileText, FileImage, File, Eye, ExternalLink, ClipboardList, Clock, LogOut, Shield, AlertTriangle } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -63,11 +63,19 @@ function isIPFSMetadata(value: unknown): value is IPFSMetadata {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 export default function ApproverDashboard() {
+  const navigate = useNavigate()
   const account = useActiveAccount()
+  const activeWallet = useActiveWallet()
+  const { disconnect } = useDisconnect()
   const { did, isRegistered, role } = useOnchainUser()
   const { writeByName, isPending } = useSSIWrite()
   const { mutateAsync: sendAndConfirmTransactionAsync } = useSendAndConfirmTransaction()
   const queryClient = useQueryClient()
+
+  const handleSignOut = () => {
+    if (activeWallet) disconnect(activeWallet)
+    navigate('/', { replace: true })
+  }
 
   const contract = getContract({
     client: thirdwebClient,
@@ -442,9 +450,7 @@ export default function ApproverDashboard() {
         <Card className="p-8 text-center max-w-md">
           <Hexagon className="h-10 w-10 text-primary mx-auto mb-3" />
           <p className="text-sm font-medium mb-2">Wallet not connected</p>
-          <Link to="/">
-            <Button className="gradient-primary text-primary-foreground">Go to Login</Button>
-          </Link>
+          <Button className="gradient-primary text-primary-foreground" onClick={() => navigate('/', { replace: true })}>Connect Wallet</Button>
         </Card>
       </div>
     )
@@ -461,11 +467,10 @@ export default function ApproverDashboard() {
           <span className="text-lg font-bold tracking-tight">VaultX</span>
           <span className="text-[11px] bg-warning/15 text-warning px-2 py-0.5 rounded-full font-semibold ml-1 tracking-wide">APPROVER</span>
         </div>
-        <Link to="/dashboard">
-          <Button variant="ghost" size="sm" className="text-xs text-muted-foreground">
-            &larr; Dashboard
-          </Button>
-        </Link>
+        <Button variant="ghost" size="sm" onClick={handleSignOut} className="text-xs text-muted-foreground hover:text-foreground gap-1.5">
+          <LogOut className="h-3.5 w-3.5" />
+          Sign Out
+        </Button>
       </nav>
 
       {/* ── Content ── */}
