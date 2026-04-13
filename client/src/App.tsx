@@ -65,7 +65,7 @@ const App = () => (
             <Route path="/governance" element={<Governance />} />
             <Route path="/dashboard/citizen" element={<CitizenDashboard />} />
             <Route path="/dashboard/approver" element={<ApproverDashboard />} />
-            <Route path="/dashboard/verifyer" element={<VerifyerDashboard />} />
+            <Route path="/dashboard/verifier" element={<VerifyerDashboard />} />
             <Route element={<AppLayout />}>
               <Route
                 path="/dashboard"
