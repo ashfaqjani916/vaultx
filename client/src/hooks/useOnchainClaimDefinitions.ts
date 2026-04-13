@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
+import { useReadContract } from "thirdweb/react";
 import { useQueries } from "@tanstack/react-query";
 import { readContract } from "thirdweb";
 import { ssiContract } from "@/lib/thirdweb";
@@ -22,7 +23,21 @@ export function readStoredClaimIds(): string[] {
 
 export function useOnchainClaimDefinitions() {
   const { isConfigured } = useSSIContract();
-  const [claimIds] = useState<string[]>(() => readStoredClaimIds());
+
+  const { data: rawClaimIds } = useReadContract({
+    contract: ssiContract,
+    method: ssiMethods.getAllClaimIds,
+    params: [],
+    queryOptions: { enabled: isConfigured },
+  });
+
+  const claimIds = useMemo<string[]>(() => {
+    const onChain = Array.isArray(rawClaimIds)
+      ? (rawClaimIds as unknown[]).map(String).filter(Boolean)
+      : [];
+    const local = readStoredClaimIds();
+    return Array.from(new Set([...onChain, ...local]));
+  }, [rawClaimIds]);
 
   const queries = useQueries({
     queries: claimIds.map((claimId) => ({

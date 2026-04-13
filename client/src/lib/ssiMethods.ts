@@ -27,6 +27,8 @@ export const ssiMethods = {
 
   createClaim: `function createClaim(${CLAIM_TUPLE} claim)`,
   getClaim: `function getClaim(string claimId) view returns ${CLAIM_TUPLE}`,
+  getAllClaimIds:
+    "function getAllClaimIds() view returns (string[])",
   approveClaim: "function approveClaim(string claimId,string governanceDid)",
   rejectClaim: "function rejectClaim(string claimId,string governanceDid)",
 

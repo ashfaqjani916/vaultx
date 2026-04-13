@@ -218,6 +218,9 @@ contract SSI {
     // Track all approver addresses for governance to query
     address[] public approverAddresses;
 
+    // Track all claim IDs for governance to query
+    string[] public allClaimIds;
+
     // Track all claim request IDs
     string[] public allRequestIds;
 
@@ -438,6 +441,8 @@ contract SSI {
             createdByDid: userAddressToDId[msg.sender],
             approvedByDid: ""
         });
+
+        allClaimIds.push(claimId);
     }
 
     function getClaim(
@@ -448,6 +453,10 @@ contract SSI {
 
     function getClaimTypes() public view returns (string[] memory) {
         return allClaimTypes;
+    }
+
+    function getAllClaimIds() public view returns (string[] memory) {
+        return allClaimIds;
     }
 
     function approveClaim(
@@ -788,19 +797,11 @@ contract SSI {
 
     // ── Governance helpers ─────────────────────────────────────────────────
 
-    function getApproverAddresses()
-        public
-        view
-        returns (address[] memory)
-    {
+    function getApproverAddresses() public view returns (address[] memory) {
         return approverAddresses;
     }
 
-    function getAllRequestIds()
-        public
-        view
-        returns (string[] memory)
-    {
+    function getAllRequestIds() public view returns (string[] memory) {
         return allRequestIds;
     }
 
@@ -810,10 +811,6 @@ contract SSI {
     ) public onlyGovernance {
         ClaimRequest storage req = claimRequests[requestId];
         require(bytes(req.requestId).length != 0, "Invalid request");
-        require(
-            req.status == ClaimRequestStatus.PENDING,
-            "Request not pending"
-        );
         require(_approverDids.length > 0, "No approvers");
 
         for (uint i = 0; i < _approverDids.length; i++) {

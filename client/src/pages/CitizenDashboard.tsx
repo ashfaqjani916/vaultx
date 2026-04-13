@@ -17,10 +17,14 @@ import { useOnchainUser } from '@/hooks/useOnchainUser'
 import { useOnchainClaimDefinitions } from '@/hooks/useOnchainClaimDefinitions'
 import { useOnchainClaimRequests } from '@/hooks/useOnchainClaimRequests'
 import { useOnchainCredentials } from '@/hooks/useOnchainCredentials'
-import { useSSIWrite } from '@/hooks/useSSIContract'
-import { claimRequestStatusLabel, credentialStatusLabel } from '@/lib/ssiParsers'
+import { claimRequestStatusLabel, claimStatusLabel, credentialStatusLabel, parseSsiClaim } from '@/lib/ssiParsers'
 import { getCategoryByClaimType, type DocumentCategory } from '@/lib/documentCategories'
 import { uploadToIPFS } from '@/lib/ipfs'
+import { isSsiContractConfigured, ssiChain, ssiContractAddress, thirdwebClient } from '@/lib/thirdweb'
+import { useQueries } from '@tanstack/react-query'
+import { getContract, prepareContractCall, readContract } from 'thirdweb'
+import { useReadContract, useSendAndConfirmTransaction } from 'thirdweb/react'
+import { ClaimRow } from './Governance'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function formatBytes(bytes: number): string {
@@ -52,9 +56,64 @@ export default function CitizenDashboard() {
   const { definitions, isLoading: defsLoading } = useOnchainClaimDefinitions()
   const { requests, addRequestId, refetchAll: refetchRequests } = useOnchainClaimRequests()
   const { credentials } = useOnchainCredentials(did)
-  const { writeByName, isPending } = useSSIWrite()
+  const { mutateAsync: sendAndConfirmTransactionAsync, isPending: isTxPending } = useSendAndConfirmTransaction()
 
-  const activeDefs = useMemo(() => definitions.filter((d) => d.status === 1), [definitions])
+  const contract = getContract({
+    client: thirdwebClient,
+    chain: ssiChain,
+    address: ssiContractAddress,
+  })
+
+  const { data: rawClaimIds } = useReadContract({
+    contract: contract,
+    method: 'function getAllClaimIds() view returns (string[])',
+    params: [],
+  })
+
+  const claimQueries = useQueries({
+    queries:
+      rawClaimIds && Array.isArray(rawClaimIds)
+        ? (rawClaimIds as string[]).map((claimId) => ({
+            queryKey: ['ssi-claim', claimId],
+            queryFn: () =>
+              readContract({
+                contract: contract,
+                method:
+                  'function getClaim(string claimId) view returns ((string claimId, string claimType, string description, bool documentRequired, bool photoRequired, bool geolocationRequired, bool biometricRequired, uint256 numberOfApprovalsNeeded, uint8 status, uint256 createdAt, uint256 approvedAt, string createdByDid, string approvedByDid))',
+                params: [claimId],
+              }),
+            enabled: isSsiContractConfigured,
+            retry: 1,
+            staleTime: 15_000,
+          }))
+        : [],
+  })
+  const allClaims = useMemo<ClaimRow[]>(() => {
+    return claimQueries
+      .map((q) => {
+        if (!q.data) return null
+        const c = parseSsiClaim(q.data)
+        if (!c.claimId) return null
+        return {
+          id: c.claimId,
+          name: c.claimType,
+          description: c.description,
+          documentRequired: c.documentRequired,
+          photoRequired: c.photoRequired,
+          geoRequired: c.geolocationRequired,
+          biometricRequired: c.biometricRequired,
+          approvalsNeeded: Number(c.numberOfApprovalsNeeded),
+          createdByDid: c.createdByDid,
+          approvedByDid: c.approvedByDid,
+          status: c.status,
+          statusLabel: claimStatusLabel(c.status),
+        }
+      })
+      .filter((c): c is ClaimRow => Boolean(c))
+  }, [claimQueries])
+
+  const availableDefs = useMemo(() => allClaims, [allClaims])
+
   const myRequests = useMemo(() => requests.filter((r) => r.citizenDid === did), [requests, did])
   const activeCredentials = useMemo(() => credentials.filter((c) => c.status === 0), [credentials])
 
@@ -69,8 +128,8 @@ export default function CitizenDashboard() {
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Get the document category for the selected claim type
-  const selectedDef = activeDefs.find((d) => d.claimId === selectedClaimId)
-  const category: DocumentCategory | undefined = selectedDef ? getCategoryByClaimType(selectedDef.claimType) : undefined
+  const selectedDef = availableDefs.find((d) => d.id === selectedClaimId)
+  const category: DocumentCategory | undefined = selectedDef ? getCategoryByClaimType(selectedDef.name) : undefined
 
   // ── Field handlers ──────────────────────────────────────────────────────
   const setField = (key: string, value: string) => setFieldValues((prev) => ({ ...prev, [key]: value }))
@@ -138,24 +197,16 @@ export default function CitizenDashboard() {
       // Step 2: Submit claim request on-chain
       const requestId = `req-${Date.now()}-${did.slice(-6)}`
       const now = BigInt(Math.floor(Date.now() / 1000))
+      const expiresAt = now + BigInt(30 * 24 * 60 * 60)
 
-      await writeByName('createClaimRequest', [
-        {
-          requestId,
-          claimId: selectedClaimId,
-          citizenDid: did,
-          documentHash: metadataCid,
-          photoHash: '',
-          geolocationHash: '',
-          biometricHash: '',
-          status: 0,
-          approverDids: [],
-          finalApproverDid: '',
-          createdAt: now,
-          updatedAt: now,
-          expiresAt: now + BigInt(30 * 24 * 60 * 60),
-        },
-      ])
+      const transaction = prepareContractCall({
+        contract,
+        method:
+          'function createClaimRequest(string requestId, string claimId, string citizenDid, string documentHash, string photoHash, string geolocationHash, string biometricHash, uint256 expiresAt)',
+        params: [requestId, selectedClaimId, did, metadataCid, '', '', '', expiresAt],
+      })
+
+      await sendAndConfirmTransactionAsync(transaction)
 
       setUploadProgress(100)
       addRequestId(requestId)
@@ -234,10 +285,8 @@ export default function CitizenDashboard() {
             </Card>
           )}
 
-          {isApproved && activeDefs.length === 0 && (
-            <Card className="p-4 border-warning/40 bg-warning/5 text-sm text-warning">
-              No active document types are configured yet. Ask governance to activate at least one claim type before submitting documents.
-            </Card>
+          {isApproved && availableDefs.length === 0 && (
+            <Card className="p-4 border-warning/40 bg-warning/5 text-sm text-warning">No claim types are available yet. Ask governance to create claim types first.</Card>
           )}
 
           {/* DID card */}
@@ -383,15 +432,13 @@ export default function CitizenDashboard() {
               <Upload className="h-4 w-4 text-primary" />
               Upload Document
             </DialogTitle>
-            <DialogDescription>
-              Select a document type, fill in the credential fields, and upload the supporting document. The file is stored on IPFS and the hash is recorded on-chain.
-            </DialogDescription>
+            <DialogDescription>Select a claim type, fill in the credential fields, and upload the supporting document. The file is stored on IPFS and the hash is recorded on-chain.</DialogDescription>
           </DialogHeader>
 
           <div className="space-y-5 mt-1">
-            {/* Document type selector */}
+            {/* Claim type selector */}
             <div>
-              <Label className="text-xs mb-1.5 block">Document Type *</Label>
+              <Label className="text-xs mb-1.5 block">Claim Type *</Label>
               {defsLoading ? (
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading...
@@ -406,12 +453,12 @@ export default function CitizenDashboard() {
                   disabled={isUploading}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder={activeDefs.length ? 'Select document type...' : 'No active claim types'} />
+                    <SelectValue placeholder={availableDefs.length ? 'Select claim type...' : 'No claim types'} />
                   </SelectTrigger>
                   <SelectContent>
-                    {activeDefs.map((d) => (
-                      <SelectItem key={d.claimId} value={d.claimId}>
-                        {d.claimType}
+                    {availableDefs.map((d) => (
+                      <SelectItem key={d.id} value={d.id}>
+                        {d.name}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -550,7 +597,7 @@ export default function CitizenDashboard() {
               <Button variant="outline" className="flex-1" onClick={closeModal} disabled={isUploading}>
                 Cancel
               </Button>
-              <Button className="flex-1 gradient-primary text-primary-foreground" disabled={!isApproved || !file || !selectedClaimId || isUploading || isPending} onClick={handleUpload}>
+              <Button className="flex-1 gradient-primary text-primary-foreground" disabled={!isApproved || !file || !selectedClaimId || isUploading || isTxPending} onClick={handleUpload}>
                 {isUploading ? (
                   <>
                     <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
