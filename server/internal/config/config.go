@@ -1,9 +1,12 @@
 package config
 
 import (
+	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 )
 
 // Config holds all application configuration.
@@ -28,6 +31,10 @@ type DatabaseConfig struct {
 
 // Load reads configuration from environment variables.
 func Load() (*Config, error) {
+	if err := loadDotEnv(); err != nil {
+		return nil, err
+	}
+
 	port := 8080
 	if p := os.Getenv("APP_PORT"); p != "" {
 		var err error
@@ -87,5 +94,78 @@ func (c *Config) validate() error {
 	if c.Database.Collection == "" {
 		return fmt.Errorf("missing database collection: set DATABASE_COLLECTION or MONGO_COLLECTION")
 	}
+	return nil
+}
+
+func loadDotEnv() error {
+	if envFile := strings.TrimSpace(os.Getenv("ENV_FILE")); envFile != "" {
+		if err := loadDotEnvFile(envFile); err != nil {
+			return fmt.Errorf("failed to load ENV_FILE %q: %w", envFile, err)
+		}
+		return nil
+	}
+
+	candidates := []string{".env", "server/.env"}
+	for _, path := range candidates {
+		err := loadDotEnvFile(path)
+		if err == nil {
+			return nil
+		}
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		return fmt.Errorf("failed to load %s: %w", path, err)
+	}
+	return nil
+}
+
+func loadDotEnvFile(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for lineNo := 1; scanner.Scan(); lineNo++ {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		if strings.HasPrefix(line, "export ") {
+			line = strings.TrimSpace(strings.TrimPrefix(line, "export "))
+		}
+
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			return fmt.Errorf("%s:%d invalid entry: expected KEY=VALUE", path, lineNo)
+		}
+
+		key = strings.TrimSpace(key)
+		if key == "" {
+			return fmt.Errorf("%s:%d invalid entry: empty key", path, lineNo)
+		}
+
+		if _, exists := os.LookupEnv(key); exists {
+			continue
+		}
+
+		value = strings.TrimSpace(value)
+		if len(value) >= 2 {
+			if (value[0] == '"' && value[len(value)-1] == '"') || (value[0] == '\'' && value[len(value)-1] == '\'') {
+				value = value[1 : len(value)-1]
+			}
+		}
+
+		if err := os.Setenv(key, value); err != nil {
+			return fmt.Errorf("%s:%d failed to set %s: %w", path, lineNo, key, err)
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("scan %s: %w", path, err)
+	}
+
 	return nil
 }

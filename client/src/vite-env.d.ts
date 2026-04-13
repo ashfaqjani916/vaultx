@@ -8,6 +8,7 @@ interface ImportMetaEnv {
   readonly VITE_THIRDWEB_EXTERNAL_WALLETS?: string;
   readonly VITE_SSI_CONTRACT_ADDRESS?: string;
   readonly VITE_SSI_CHAIN_ID?: string;
+  readonly VITE_VAULT_API_URL?: string;
 }
 
 interface ImportMeta {
