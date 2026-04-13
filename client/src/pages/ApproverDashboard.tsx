@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { useQueries, useQueryClient } from '@tanstack/react-query'
-import { useActiveAccount, useReadContract, useSendAndConfirmTransaction } from 'thirdweb/react'
+import { useActiveAccount, useSendAndConfirmTransaction } from 'thirdweb/react'
 import { getContract, prepareContractCall, readContract } from 'thirdweb'
 import { motion } from 'framer-motion'
 import { Hexagon, CheckCircle2, XCircle, Loader2, FileText, FileImage, File, Eye, ExternalLink, ClipboardList, Clock, Shield, AlertTriangle } from 'lucide-react'
