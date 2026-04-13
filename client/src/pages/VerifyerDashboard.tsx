@@ -1,13 +1,14 @@
 import { useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { QRCodeSVG } from 'qrcode.react'
-import { AlertCircle, Hexagon, Loader2, QrCode, ScanLine, ShieldCheck } from 'lucide-react'
+import { AlertCircle, Hexagon, Loader2, LogOut, QrCode, ScanLine, ShieldCheck } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { useActiveWallet, useDisconnect } from 'thirdweb/react'
 import { useOnchainUser } from '@/hooks/useOnchainUser'
 import { useSSIWrite } from '@/hooks/useSSIContract'
 
@@ -18,8 +19,16 @@ const cardAnim = (i: number) => ({
 })
 
 export default function VerifyerDashboard() {
+  const navigate = useNavigate()
+  const activeWallet = useActiveWallet()
+  const { disconnect } = useDisconnect()
   const { did } = useOnchainUser()
   const { write, isPending } = useSSIWrite()
+
+  const handleSignOut = () => {
+    if (activeWallet) disconnect(activeWallet)
+    navigate('/', { replace: true })
+  }
 
   const [citizenDid, setCitizenDid] = useState('')
   const [requestedClaimsText, setRequestedClaimsText] = useState('')
@@ -163,11 +172,10 @@ export default function VerifyerDashboard() {
           <span className="text-lg font-bold tracking-tight">VaultX</span>
           <span className="text-[11px] bg-primary/10 text-primary px-2 py-0.5 rounded-full font-semibold ml-1 tracking-wide">VERIFYER</span>
         </div>
-        <Link to="/">
-          <Button variant="ghost" size="sm" className="text-xs text-muted-foreground">
-            Back to Login
-          </Button>
-        </Link>
+        <Button variant="ghost" size="sm" onClick={handleSignOut} className="text-xs text-muted-foreground hover:text-foreground gap-1.5">
+          <LogOut className="h-3.5 w-3.5" />
+          Sign Out
+        </Button>
       </nav>
 
       <div className="flex-1 p-6">

@@ -4,7 +4,7 @@ import { useQueries, useQueryClient } from '@tanstack/react-query'
 import { useActiveAccount, useActiveWallet, useDisconnect, useReadContract, useSendAndConfirmTransaction } from 'thirdweb/react'
 import { getContract, prepareContractCall, readContract } from 'thirdweb'
 import { motion } from 'framer-motion'
-import { Hexagon, LogOut, Plus, CheckCircle2, XCircle, Loader2, FileText, RefreshCw, ShieldCheck, ClipboardList, AlertTriangle, Inbox, Send, UserPlus, Users } from 'lucide-react'
+import { Hexagon, LogOut, Plus, CheckCircle2, XCircle, Loader2, FileText, RefreshCw, ShieldCheck, ClipboardList, AlertTriangle, Inbox, Send, UserPlus, Users, UserCheck } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -18,7 +18,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { ssiContract, isSsiContractConfigured, ssiDeployerAddress, isSsiDeployerConfigured, ssiChain, ssiContractAddress, thirdwebClient } from '@/lib/thirdweb'
 import { ssiMethods } from '@/lib/ssiMethods'
-import { parseSsiClaim, claimStatusLabel, parseSsiClaimRequest, claimRequestStatusLabel, type SsiClaimRequest } from '@/lib/ssiParsers'
+import { parseSsiClaim, claimStatusLabel, parseSsiClaimRequest, claimRequestStatusLabel, roleIndexToUserRole, type SsiClaimRequest } from '@/lib/ssiParsers'
 import { useSSIWrite } from '@/hooks/useSSIContract'
 import { useOnchainUser } from '@/hooks/useOnchainUser'
 import { toast } from '@/hooks/use-toast'
@@ -63,6 +63,15 @@ export type ClaimRow = {
   approvedByDid: string
   status: number
   statusLabel: 'active' | 'pending' | 'rejected' | 'deprecated'
+}
+
+type UserInfo = {
+  address: string
+  did: string
+  role: number
+  roleLabel: string
+  active: boolean
+  isApproved: boolean
 }
 
 type ApproverInfo = {
@@ -166,6 +175,53 @@ export default function Governance() {
   const allApprovers = useMemo<ApproverInfo[]>(() => {
     return approverQueries.map((q) => q.data).filter((a): a is ApproverInfo => Boolean(a?.did))
   }, [approverQueries])
+
+  // ── All user addresses from contract ─────────────────────────────────────
+  const { data: rawUserAddresses } = useReadContract({
+    contract,
+    method: 'function getAllUserAddresses() view returns (address[])',
+    params: [],
+    queryOptions: { enabled: isSsiContractConfigured },
+  })
+
+  const userAddresses = useMemo<string[]>(() => {
+    if (!rawUserAddresses || !Array.isArray(rawUserAddresses)) return []
+    return rawUserAddresses.map(String)
+  }, [rawUserAddresses])
+
+  const userQueries = useQueries({
+    queries: userAddresses.map((addr) => ({
+      queryKey: ['ssi-user-info', addr],
+      queryFn: async () => {
+        const user = await readContract({
+          contract,
+          method: 'function getUser(address userAddress) view returns ((string did, address wallet, uint8 role, bool active, bool isApproved, string revokedByDid))',
+          params: [addr] as const,
+        })
+        const record = (user ?? {}) as Record<string, unknown>
+        const did = String(record.did ?? (Array.isArray(user) ? user[0] : ''))
+        const wallet = String(record.wallet ?? (Array.isArray(user) ? user[1] : ''))
+        const role = Number(record.role ?? (Array.isArray(user) ? user[2] : 0))
+        const active = Boolean(record.active ?? (Array.isArray(user) ? user[3] : false))
+        const isApproved = Boolean(record.isApproved ?? (Array.isArray(user) ? user[4] : false))
+        return { address: addr, did, role, roleLabel: roleIndexToUserRole(role), active, isApproved } as UserInfo
+      },
+      enabled: isSsiContractConfigured && userAddresses.length > 0,
+      staleTime: 30_000,
+    })),
+  })
+
+  const allUsers = useMemo<UserInfo[]>(() => {
+    return userQueries.map((q) => q.data).filter((u): u is UserInfo => Boolean(u?.did))
+  }, [userQueries])
+
+  const pendingUsers = useMemo(() => allUsers.filter((u) => !u.isApproved && u.active), [allUsers])
+  const approvedUsers = useMemo(() => allUsers.filter((u) => u.isApproved), [allUsers])
+  const isUsersLoading = userQueries.some((q) => q.isLoading)
+
+  const refetchAllUsers = () => {
+    queryClient.invalidateQueries({ queryKey: ['ssi-user-info'] })
+  }
 
   // ── Claim Requests - read from contract's allRequestIds ─────────────────
   const { data: rawRequestIds } = useReadContract({
@@ -415,6 +471,61 @@ export default function Governance() {
       setActing((p) => {
         const n = { ...p }
         delete n[claimId]
+        return n
+      })
+    }
+  }
+
+  // ── User approval actions ────────────────────────────────────────────────
+  const [userActing, setUserActing] = useState<Record<string, 'approving' | 'rejecting'>>({})
+
+  const handleApproveUser = async (did: string) => {
+    setUserActing((p) => ({ ...p, [did]: 'approving' }))
+    try {
+      const transaction = prepareContractCall({
+        contract,
+        method: 'function approveUserRequest(string did)',
+        params: [did],
+      })
+      await sendAndConfirmTransactionAsync(transaction)
+      refetchAllUsers()
+      toast({ title: 'User approved', description: did })
+    } catch (err) {
+      toast({
+        title: 'User approval failed',
+        description: err instanceof Error ? err.message : 'Transaction failed',
+        variant: 'destructive',
+      })
+    } finally {
+      setUserActing((p) => {
+        const n = { ...p }
+        delete n[did]
+        return n
+      })
+    }
+  }
+
+  const handleRejectUser = async (did: string) => {
+    setUserActing((p) => ({ ...p, [did]: 'rejecting' }))
+    try {
+      const transaction = prepareContractCall({
+        contract,
+        method: 'function rejectUserRequest(string did)',
+        params: [did],
+      })
+      await sendAndConfirmTransactionAsync(transaction)
+      refetchAllUsers()
+      toast({ title: 'User rejected', description: did })
+    } catch (err) {
+      toast({
+        title: 'User rejection failed',
+        description: err instanceof Error ? err.message : 'Transaction failed',
+        variant: 'destructive',
+      })
+    } finally {
+      setUserActing((p) => {
+        const n = { ...p }
+        delete n[did]
         return n
       })
     }
@@ -680,6 +791,122 @@ export default function Governance() {
               </motion.div>
             ))}
           </div>
+
+          {/* ── User Approvals section ── */}
+          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35, delay: 0.2 }} className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-semibold tracking-tight flex items-center gap-2">
+                  <UserCheck className="h-4 w-4 text-primary" />
+                  User Approvals
+                </h2>
+                <p className="text-xs text-muted-foreground mt-0.5">Approve or reject user registration requests</p>
+              </div>
+              <Button variant="outline" size="sm" onClick={refetchAllUsers} disabled={isUsersLoading} className="text-xs">
+                <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${isUsersLoading ? 'animate-spin' : ''}`} />
+                Refresh
+              </Button>
+            </div>
+
+            {/* Mini stats */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              {[
+                { label: 'Total Users', value: allUsers.length, color: 'text-primary' },
+                { label: 'Pending Approval', value: pendingUsers.length, color: 'text-warning' },
+                { label: 'Approved', value: approvedUsers.length, color: 'text-success' },
+              ].map((s) => (
+                <Card key={s.label} className="p-3 shadow-card border-border bg-card">
+                  <p className="text-[10px] text-muted-foreground font-medium mb-1.5">{s.label}</p>
+                  <p className={`text-xl font-bold ${s.color}`}>{s.value}</p>
+                </Card>
+              ))}
+            </div>
+
+            {/* Pending users table */}
+            <Card className="shadow-card border-border bg-card overflow-hidden">
+              <Table>
+                <TableHeader>
+                  <TableRow className="bg-muted/50">
+                    <TableHead className="text-xs">DID</TableHead>
+                    <TableHead className="text-xs">Wallet</TableHead>
+                    <TableHead className="text-xs">Role</TableHead>
+                    <TableHead className="text-xs">Status</TableHead>
+                    <TableHead className="text-xs text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {isUsersLoading && (
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-center py-12">
+                        <Loader2 className="h-5 w-5 animate-spin mx-auto text-muted-foreground" />
+                      </TableCell>
+                    </TableRow>
+                  )}
+
+                  {!isUsersLoading &&
+                    pendingUsers.map((u) => {
+                      const isActing = Boolean(userActing[u.did])
+                      return (
+                        <TableRow key={u.did} className="hover:bg-muted/30 transition-colors">
+                          <TableCell className="text-xs font-mono text-muted-foreground max-w-[180px] truncate">{u.did}</TableCell>
+                          <TableCell className="text-xs font-mono text-muted-foreground">{shortAddress(u.address)}</TableCell>
+                          <TableCell>
+                            <span className="text-xs font-medium capitalize">{u.roleLabel}</span>
+                          </TableCell>
+                          <TableCell>
+                            <StatusBadge status="pending" />
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              <Button
+                                size="sm"
+                                className="h-7 text-xs bg-success/15 text-success hover:bg-success/25 border border-success/20 px-2.5 shadow-none"
+                                disabled={isActing}
+                                onClick={() => handleApproveUser(u.did)}
+                              >
+                                {userActing[u.did] === 'approving' ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <>
+                                    <CheckCircle2 className="h-3 w-3 mr-1" />
+                                    Approve
+                                  </>
+                                )}
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-7 text-xs text-destructive hover:bg-destructive/10 border border-destructive/20 px-2.5"
+                                disabled={isActing}
+                                onClick={() => handleRejectUser(u.did)}
+                              >
+                                {userActing[u.did] === 'rejecting' ? (
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                ) : (
+                                  <>
+                                    <XCircle className="h-3 w-3 mr-1" />
+                                    Reject
+                                  </>
+                                )}
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      )
+                    })}
+
+                  {!isUsersLoading && pendingUsers.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-center py-14">
+                        <UserCheck className="h-9 w-9 text-muted-foreground/20 mx-auto mb-2.5" />
+                        <p className="text-xs text-muted-foreground">No pending user approvals</p>
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </Card>
+          </motion.div>
 
           {/* ── Claim tabs + tables ── */}
           <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35, delay: 0.18 }}>
