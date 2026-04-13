@@ -42,6 +42,25 @@ type IPFSMetadata = {
   uploadedAt: string
 }
 
+type RequestAsset = {
+  label: string
+  key: 'documentHash' | 'photoHash' | 'geolocationHash' | 'biometricHash'
+  hash: string
+}
+
+const REQUEST_ASSET_KEYS: Array<{ label: string; key: RequestAsset['key'] }> = [
+  { label: 'Document', key: 'documentHash' },
+  { label: 'Photo', key: 'photoHash' },
+  { label: 'Geo Tag', key: 'geolocationHash' },
+  { label: 'Biometric', key: 'biometricHash' },
+]
+
+function isIPFSMetadata(value: unknown): value is IPFSMetadata {
+  if (!value || typeof value !== 'object') return false
+  const v = value as Partial<IPFSMetadata>
+  return typeof v.fileCid === 'string' && typeof v.fileName === 'string'
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 export default function ApproverDashboard() {
   const account = useActiveAccount()
@@ -122,6 +141,38 @@ export default function ApproverDashboard() {
   const pending = myRequests.filter((r) => r.status === 1) // IN_REVIEW
   const completed = myRequests.filter((r) => r.status === 3 || r.status === 4) // ISSUED or REJECTED
 
+  const approverAddress = (account?.address || ssiContractAddress) as `0x${string}`
+  const hasSignedQueries = useQueries({
+    queries: pending.map((req) => ({
+      queryKey: ['ssi-has-signed', req.requestId, approverAddress],
+      queryFn: async () => {
+        const signed = await readContract({
+          contract,
+          method: 'function hasSigned(string, address) view returns (bool)',
+          params: [req.requestId, approverAddress],
+        })
+        return Boolean(signed)
+      },
+      enabled: isSsiContractConfigured && Boolean(account?.address),
+      staleTime: 10_000,
+      retry: 1,
+    })),
+  })
+
+  const signedByMeRequestIds = useMemo(() => {
+    const set = new Set<string>()
+    hasSignedQueries.forEach((q, i) => {
+      if (q.data) {
+        const id = pending[i]?.requestId
+        if (id) set.add(id)
+      }
+    })
+    return set
+  }, [hasSignedQueries, pending])
+
+  const actionablePending = useMemo(() => pending.filter((r) => !signedByMeRequestIds.has(r.requestId)), [pending, signedByMeRequestIds])
+  const signedPending = useMemo(() => pending.filter((r) => signedByMeRequestIds.has(r.requestId)), [pending, signedByMeRequestIds])
+
   // Fetch claim definitions for display
   const claimIdSet = useMemo(() => Array.from(new Set(myRequests.map((r) => r.claimId))), [myRequests])
 
@@ -152,26 +203,126 @@ export default function ApproverDashboard() {
   // ── Review modal state ──────────────────────────────────────────────────
   const [viewing, setViewing] = useState<SsiClaimRequest | null>(null)
   const [remarks, setRemarks] = useState('')
-  const [ipfsData, setIpfsData] = useState<IPFSMetadata | null>(null)
+  const [ipfsDataByHash, setIpfsDataByHash] = useState<Record<string, unknown>>({})
   const [loadingIpfs, setLoadingIpfs] = useState(false)
   const [acting, setActing] = useState<Record<string, 'approving' | 'rejecting'>>({})
+
+  const getRequestAssets = (req: SsiClaimRequest): RequestAsset[] =>
+    REQUEST_ASSET_KEYS.map(({ label, key }) => ({
+      label,
+      key,
+      hash: (req[key] || '').trim(),
+    })).filter((asset) => Boolean(asset.hash))
 
   const openReview = async (req: SsiClaimRequest) => {
     setViewing(req)
     setRemarks('')
-    setIpfsData(null)
+    setIpfsDataByHash({})
 
-    if (req.documentHash) {
-      setLoadingIpfs(true)
-      try {
-        const data = await fetchFromIPFS<IPFSMetadata>(req.documentHash)
-        setIpfsData(data)
-      } catch (err) {
-        console.error('Failed to fetch IPFS metadata:', err)
-      } finally {
-        setLoadingIpfs(false)
-      }
+    const assets = getRequestAssets(req)
+    if (assets.length === 0) return
+
+    setLoadingIpfs(true)
+    try {
+      const results = await Promise.allSettled(
+        assets.map(async (asset) => {
+          const data = await fetchFromIPFS(asset.hash)
+          return { hash: asset.hash, data }
+        }),
+      )
+
+      const next: Record<string, unknown> = {}
+      results.forEach((res) => {
+        if (res.status === 'fulfilled') {
+          next[res.value.hash] = res.value.data
+        }
+      })
+      setIpfsDataByHash(next)
+    } catch (err) {
+      console.error('Failed to fetch IPFS metadata:', err)
+    } finally {
+      setLoadingIpfs(false)
     }
+  }
+
+  const renderAssetPreview = (asset: RequestAsset) => {
+    const loaded = ipfsDataByHash[asset.hash]
+
+    if (!loaded) {
+      return (
+        <div className="rounded-lg bg-muted/50 border border-border p-3">
+          <div className="flex items-center gap-2">
+            <FileText className="h-4 w-4 text-primary" />
+            <div className="flex-1">
+              <p className="text-xs font-medium">{asset.label} on IPFS</p>
+              <code className="text-[10px] text-muted-foreground font-mono break-all">{asset.hash}</code>
+            </div>
+            <a href={getIPFSUrl(asset.hash)} target="_blank" rel="noopener noreferrer">
+              <Button variant="outline" size="sm" className="h-7 text-xs gap-1">
+                <ExternalLink className="h-3 w-3" />
+                View
+              </Button>
+            </a>
+          </div>
+        </div>
+      )
+    }
+
+    if (isIPFSMetadata(loaded)) {
+      return (
+        <div className="space-y-3">
+          <div className="rounded-lg bg-muted/50 border border-border p-3">
+            <div className="flex items-center gap-2.5 mb-2">
+              <DocIcon name={loaded.fileName} />
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-medium truncate">{loaded.fileName}</p>
+                <p className="text-[10px] text-muted-foreground">
+                  {loaded.fileType} &middot; {loaded.fileSize > 0 ? `${(loaded.fileSize / 1024).toFixed(1)} KB` : '—'}
+                </p>
+              </div>
+              <a href={getIPFSUrl(loaded.fileCid)} target="_blank" rel="noopener noreferrer">
+                <Button variant="outline" size="sm" className="h-7 text-xs gap-1">
+                  <ExternalLink className="h-3 w-3" />
+                  View File
+                </Button>
+              </a>
+            </div>
+            <div className="text-[10px] text-muted-foreground border-t border-border/60 pt-2 mt-2 space-y-1">
+              <div>
+                <span>Metadata CID: </span>
+                <code className="font-mono break-all">{asset.hash}</code>
+              </div>
+              <div>
+                <span>File CID: </span>
+                <code className="font-mono break-all">{loaded.fileCid}</code>
+              </div>
+            </div>
+          </div>
+
+          {Object.keys(loaded.documentFields).length > 0 && (
+            <div className="rounded-lg bg-muted/50 border border-border p-3">
+              <p className="text-xs font-medium mb-2">Metadata Fields</p>
+              <div className="space-y-1.5">
+                {Object.entries(loaded.documentFields).map(([key, value]) => (
+                  <div key={key} className="flex items-center justify-between text-xs gap-4">
+                    <span className="text-muted-foreground capitalize">{key.replace(/([A-Z])/g, ' $1').trim()}</span>
+                    <span className="font-medium text-right break-all">{value || '—'}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )
+    }
+
+    return (
+      <div className="rounded-lg bg-muted/50 border border-border p-3 space-y-2">
+        <p className="text-xs font-medium">{asset.label} JSON Payload</p>
+        <code className="text-[10px] text-muted-foreground font-mono break-all block">{asset.hash}</code>
+        <pre className="text-[10px] bg-background/60 border border-border rounded p-2 overflow-x-auto">{JSON.stringify(loaded, null, 2)}</pre>
+      </div>
+    )
   }
 
   // ── Approve with signature ──────────────────────────────────────────────
@@ -214,22 +365,28 @@ export default function ApproverDashboard() {
 
       toast({ title: 'Request approved', description: requestId })
 
-      // Try to unpin the document from IPFS after successful approval
-      if (req.documentHash) {
+      // Try to unpin uploaded assets from IPFS after successful approval
+      if (req.documentHash || req.photoHash || req.geolocationHash || req.biometricHash) {
         try {
-          // Fetch metadata to get the file CID too
-          const meta = ipfsData || (await fetchFromIPFS<IPFSMetadata>(req.documentHash))
-          if (meta?.fileCid) {
-            await unpinFromIPFS(meta.fileCid)
+          const hashesToUnpin = [req.documentHash, req.photoHash, req.geolocationHash, req.biometricHash].filter(Boolean)
+          for (const hash of hashesToUnpin) {
+            const loaded = ipfsDataByHash[hash] || (await fetchFromIPFS(hash))
+            if (isIPFSMetadata(loaded) && loaded.fileCid) {
+              await unpinFromIPFS(loaded.fileCid)
+            }
+            await unpinFromIPFS(hash)
           }
-          await unpinFromIPFS(req.documentHash)
         } catch {
           // Non-critical: unpin failure doesn't affect the approval
         }
       }
 
       // Refresh data
-      queryClient.invalidateQueries({ queryKey: ['ssi-claim-request', requestId] })
+      await Promise.all([queryClient.invalidateQueries({ queryKey: ['ssi-claim-request', requestId] }), queryClient.invalidateQueries({ queryKey: ['ssi-has-signed', requestId] })])
+      await Promise.all([
+        queryClient.refetchQueries({ queryKey: ['ssi-claim-request', requestId], type: 'active' }),
+        queryClient.refetchQueries({ queryKey: ['ssi-has-signed', requestId], type: 'active' }),
+      ])
       if (viewing?.requestId === requestId) setViewing(null)
     } catch (err) {
       toast({
@@ -255,7 +412,11 @@ export default function ApproverDashboard() {
 
       toast({ title: 'Request rejected', description: requestId })
 
-      queryClient.invalidateQueries({ queryKey: ['ssi-claim-request', requestId] })
+      await Promise.all([queryClient.invalidateQueries({ queryKey: ['ssi-claim-request', requestId] }), queryClient.invalidateQueries({ queryKey: ['ssi-has-signed', requestId] })])
+      await Promise.all([
+        queryClient.refetchQueries({ queryKey: ['ssi-claim-request', requestId], type: 'active' }),
+        queryClient.refetchQueries({ queryKey: ['ssi-has-signed', requestId], type: 'active' }),
+      ])
       if (viewing?.requestId === requestId) setViewing(null)
     } catch (err) {
       toast({
@@ -273,6 +434,7 @@ export default function ApproverDashboard() {
   }
 
   const isRequestsLoading = requestQueries.some((q) => q.isLoading)
+  const isSignedStatusLoading = hasSignedQueries.some((q) => q.isLoading)
 
   if (!account) {
     return (
@@ -318,7 +480,7 @@ export default function ApproverDashboard() {
           {/* Stats */}
           <div className="grid grid-cols-3 gap-4">
             {[
-              { label: 'Pending', value: pending.length, color: 'text-warning', bg: 'bg-warning/10', Icon: Clock },
+              { label: 'Pending', value: actionablePending.length, color: 'text-warning', bg: 'bg-warning/10', Icon: Clock },
               { label: 'Approved', value: completed.filter((r) => r.status === 3).length, color: 'text-success', bg: 'bg-success/10', Icon: CheckCircle2 },
               { label: 'Rejected', value: completed.filter((r) => r.status === 4).length, color: 'text-destructive', bg: 'bg-destructive/10', Icon: XCircle },
             ].map((s, i) => (
@@ -337,31 +499,31 @@ export default function ApproverDashboard() {
           </div>
 
           {/* Loading */}
-          {isRequestsLoading && (
+          {(isRequestsLoading || isSignedStatusLoading) && (
             <div className="flex justify-center py-12">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
             </div>
           )}
 
           {/* Pending request cards */}
-          {!isRequestsLoading && (
+          {!isRequestsLoading && !isSignedStatusLoading && (
             <div className="space-y-3">
               <h2 className="font-semibold text-sm flex items-center gap-2">
                 <ClipboardList className="h-4 w-4 text-primary" />
                 Assigned Requests
               </h2>
 
-              {pending.length === 0 ? (
+              {actionablePending.length === 0 ? (
                 <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
                   <Card className="p-14 text-center shadow-card border-border bg-card">
                     <CheckCircle2 className="h-10 w-10 text-success/25 mx-auto mb-3" />
                     <p className="text-sm font-medium">All caught up!</p>
-                    <p className="text-xs text-muted-foreground mt-1">No pending requests to review.</p>
+                    <p className="text-xs text-muted-foreground mt-1">No unsigned pending requests to review.</p>
                   </Card>
                 </motion.div>
               ) : (
                 <div className="space-y-3">
-                  {pending.map((req, i) => {
+                  {actionablePending.map((req, i) => {
                     const isActing = Boolean(acting[req.requestId])
                     const claim = claimMap[req.claimId]
                     return (
@@ -393,18 +555,22 @@ export default function ApproverDashboard() {
                           </div>
 
                           {/* IPFS document link */}
-                          {req.documentHash && (
-                            <div className="mb-4 px-3 py-2 rounded-lg bg-muted/50 border border-border flex items-center gap-2">
-                              <FileText className="h-4 w-4 text-primary shrink-0" />
-                              <div className="flex-1 min-w-0">
-                                <p className="text-xs font-medium">IPFS Document</p>
-                                <code className="text-[10px] text-muted-foreground font-mono truncate block">{req.documentHash}</code>
-                              </div>
-                              <a href={getIPFSUrl(req.documentHash)} target="_blank" rel="noopener noreferrer">
-                                <Button variant="ghost" size="sm" className="h-6 w-6 p-0">
-                                  <ExternalLink className="h-3 w-3" />
-                                </Button>
-                              </a>
+                          {getRequestAssets(req).length > 0 && (
+                            <div className="mb-4 space-y-2">
+                              {getRequestAssets(req).map((asset) => (
+                                <div key={asset.key} className="px-3 py-2 rounded-lg bg-muted/50 border border-border flex items-center gap-2">
+                                  <FileText className="h-4 w-4 text-primary shrink-0" />
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-xs font-medium">IPFS {asset.label}</p>
+                                    <code className="text-[10px] text-muted-foreground font-mono truncate block">{asset.hash}</code>
+                                  </div>
+                                  <a href={getIPFSUrl(asset.hash)} target="_blank" rel="noopener noreferrer">
+                                    <Button variant="ghost" size="sm" className="h-6 w-6 p-0">
+                                      <ExternalLink className="h-3 w-3" />
+                                    </Button>
+                                  </a>
+                                </div>
+                              ))}
                             </div>
                           )}
 
@@ -436,6 +602,28 @@ export default function ApproverDashboard() {
                 </div>
               )}
             </div>
+          )}
+
+          {/* Signed by approver section */}
+          {!isRequestsLoading && !isSignedStatusLoading && signedPending.length > 0 && (
+            <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }} className="space-y-3">
+              <h2 className="font-semibold text-sm flex items-center gap-2 text-muted-foreground">
+                <Shield className="h-4 w-4" />
+                Signed By You (Awaiting Others)
+              </h2>
+              <div className="space-y-2">
+                {signedPending.map((req) => (
+                  <Card key={req.requestId} className="px-4 py-3 shadow-card border-border bg-card flex items-center justify-between">
+                    <div className="text-xs">
+                      <span className="font-mono text-muted-foreground">{req.requestId}</span>
+                      <span className="mx-2 text-muted-foreground/40">&middot;</span>
+                      <span className="font-medium">{claimMap[req.claimId]?.claimType || req.claimId}</span>
+                    </div>
+                    <span className="text-[10px] px-2 py-1 rounded-full bg-primary/10 text-primary font-semibold">Signed by you</span>
+                  </Card>
+                ))}
+              </div>
+            </motion.div>
           )}
 
           {/* Completed section */}
@@ -495,72 +683,25 @@ export default function ApproverDashboard() {
                 </div>
               </div>
 
-              {/* IPFS Document Details */}
+              {/* IPFS Asset Details */}
               <div>
-                <Label className="text-xs mb-2 block">Submitted Document</Label>
+                <Label className="text-xs mb-2 block">Submitted Artifacts</Label>
                 {loadingIpfs ? (
                   <div className="flex items-center gap-2 py-4 justify-center text-xs text-muted-foreground">
                     <Loader2 className="h-4 w-4 animate-spin" />
                     Loading from IPFS...
                   </div>
-                ) : ipfsData ? (
+                ) : getRequestAssets(viewing).length > 0 ? (
                   <div className="space-y-3">
-                    {/* File info */}
-                    <div className="rounded-lg bg-muted/50 border border-border p-3">
-                      <div className="flex items-center gap-2.5 mb-2">
-                        <DocIcon name={ipfsData.fileName} />
-                        <div className="flex-1 min-w-0">
-                          <p className="text-xs font-medium truncate">{ipfsData.fileName}</p>
-                          <p className="text-[10px] text-muted-foreground">
-                            {ipfsData.fileType} &middot; {ipfsData.fileSize > 0 ? `${(ipfsData.fileSize / 1024).toFixed(1)} KB` : '—'}
-                          </p>
-                        </div>
-                        <a href={getIPFSUrl(ipfsData.fileCid)} target="_blank" rel="noopener noreferrer">
-                          <Button variant="outline" size="sm" className="h-7 text-xs gap-1">
-                            <ExternalLink className="h-3 w-3" />
-                            View File
-                          </Button>
-                        </a>
+                    {getRequestAssets(viewing).map((asset) => (
+                      <div key={asset.key} className="space-y-1.5">
+                        <p className="text-xs font-medium">{asset.label}</p>
+                        {renderAssetPreview(asset)}
                       </div>
-                      <div className="text-[10px] text-muted-foreground border-t border-border/60 pt-2 mt-2">
-                        <span>IPFS CID: </span>
-                        <code className="font-mono">{ipfsData.fileCid}</code>
-                      </div>
-                    </div>
-
-                    {/* Credential fields */}
-                    {Object.keys(ipfsData.documentFields).length > 0 && (
-                      <div className="rounded-lg bg-muted/50 border border-border p-3">
-                        <p className="text-xs font-medium mb-2">Credential Fields</p>
-                        <div className="space-y-1.5">
-                          {Object.entries(ipfsData.documentFields).map(([key, value]) => (
-                            <div key={key} className="flex items-center justify-between text-xs">
-                              <span className="text-muted-foreground capitalize">{key.replace(/([A-Z])/g, ' $1').trim()}</span>
-                              <span className="font-medium">{value || '—'}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ) : viewing.documentHash ? (
-                  <div className="rounded-lg bg-muted/50 border border-border p-3">
-                    <div className="flex items-center gap-2">
-                      <FileText className="h-4 w-4 text-primary" />
-                      <div className="flex-1">
-                        <p className="text-xs font-medium">Document on IPFS</p>
-                        <code className="text-[10px] text-muted-foreground font-mono">{viewing.documentHash}</code>
-                      </div>
-                      <a href={getIPFSUrl(viewing.documentHash)} target="_blank" rel="noopener noreferrer">
-                        <Button variant="outline" size="sm" className="h-7 text-xs gap-1">
-                          <ExternalLink className="h-3 w-3" />
-                          View
-                        </Button>
-                      </a>
-                    </div>
+                    ))}
                   </div>
                 ) : (
-                  <p className="text-xs text-muted-foreground">No document attached.</p>
+                  <p className="text-xs text-muted-foreground">No artifacts attached.</p>
                 )}
               </div>
 
