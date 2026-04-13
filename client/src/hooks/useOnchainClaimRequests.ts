@@ -1,8 +1,8 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
+import { useReadContract } from "thirdweb/react";
 import { useQueries, useQueryClient } from "@tanstack/react-query";
-import { readContract } from "thirdweb";
-import { ssiContract } from "@/lib/thirdweb";
-import { ssiMethods } from "@/lib/ssiMethods";
+import { getContract, readContract } from "thirdweb";
+import { ssiChain, ssiContract, ssiContractAddress, thirdwebClient } from "@/lib/thirdweb";
 import { parseSsiClaimRequest, type SsiClaimRequest } from "@/lib/ssiParsers";
 import { useSSIContract } from "@/hooks/useSSIContract";
 
@@ -28,15 +28,33 @@ export function writeStoredRequestIds(ids: string[]) {
 export function useOnchainClaimRequests() {
   const { isConfigured } = useSSIContract();
   const queryClient = useQueryClient();
-  const [requestIds, setRequestIds] = useState<string[]>(() => readStoredRequestIds());
+
+  const contract = getContract({
+    client: thirdwebClient,
+    chain: ssiChain,
+    address: ssiContractAddress,
+  })
+
+  const { data: rawRequestIds, refetch: refetchRequestIds } = useReadContract({
+    contract: contract,
+    method: "function getAllRequestIds() view returns (string[])",
+    params: [],
+    queryOptions: { enabled: isConfigured },
+  });
+
+  const requestIds = useMemo<string[]>(() => {
+    if (!Array.isArray(rawRequestIds)) return [];
+    return (rawRequestIds as unknown[]).map(String).filter(Boolean);
+  }, [rawRequestIds]);
 
   const queries = useQueries({
     queries: requestIds.map((requestId) => ({
       queryKey: ["ssi-claim-request", requestId],
       queryFn: () =>
         readContract({
-          contract: ssiContract,
-          method: ssiMethods.getClaimRequest,
+          contract: contract,
+          method:
+            "function getClaimRequest(string requestId) view returns ((string requestId, string claimId, string citizenDid, string documentHash, string photoHash, string geolocationHash, string biometricHash, uint8 status, string[] approverDids, string finalApproverDid, uint256 createdAt, uint256 updatedAt, uint256 expiresAt))",
           params: [requestId],
         }),
       enabled: isConfigured,
@@ -49,19 +67,23 @@ export function useOnchainClaimRequests() {
     return queries
       .map((q) => {
         if (!q.data) return null;
-        return parseSsiClaimRequest(q.data);
+        const parsed = parseSsiClaimRequest(q.data);
+        if (parsed.requestId) return parsed;
+        if (Array.isArray(q.data) && q.data.length > 0) {
+          return parseSsiClaimRequest(q.data[0]);
+        }
+        return parsed;
       })
       .filter((r): r is SsiClaimRequest => Boolean(r?.requestId));
   }, [queries]);
 
+
   const addRequestId = useCallback((id: string) => {
-    setRequestIds((prev) => {
-      if (prev.includes(id)) return prev;
-      const next = [id, ...prev];
-      writeStoredRequestIds(next);
-      return next;
-    });
-  }, []);
+    void id;
+    // IDs are sourced from chain only; refresh after successful tx.
+    void refetchRequestIds();
+    queryClient.invalidateQueries({ queryKey: ["ssi-claim-request"] });
+  }, [queryClient, refetchRequestIds]);
 
   const refetchAll = useCallback(() => {
     requestIds.forEach((id) => {

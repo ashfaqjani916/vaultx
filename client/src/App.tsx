@@ -12,8 +12,8 @@ import Login from './pages/Login'
 import Governance from './pages/Governance'
 import CitizenDashboard from './pages/CitizenDashboard'
 import ApproverDashboard from './pages/ApproverDashboard'
+import VerifyerDashboard from './pages/VerifyerDashboard'
 import Dashboard from './pages/Dashboard'
-import IdentityWallet from './pages/IdentityWallet'
 import ClaimRegistry from './pages/ClaimRegistry'
 import ClaimRequests from './pages/ClaimRequests'
 import Verification from './pages/Verification'
@@ -65,20 +65,13 @@ const App = () => (
             <Route path="/governance" element={<Governance />} />
             <Route path="/dashboard/citizen" element={<CitizenDashboard />} />
             <Route path="/dashboard/approver" element={<ApproverDashboard />} />
+            <Route path="/dashboard/verifier" element={<VerifyerDashboard />} />
             <Route element={<AppLayout />}>
               <Route
                 path="/dashboard"
                 element={
                   <RoleGuard>
                     <Dashboard />
-                  </RoleGuard>
-                }
-              />
-              <Route
-                path="/identity"
-                element={
-                  <RoleGuard requireRegistered={false}>
-                    <IdentityWallet />
                   </RoleGuard>
                 }
               />
