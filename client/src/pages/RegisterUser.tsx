@@ -163,7 +163,7 @@ export default function RegisterUser() {
       const roleRoutes: Record<OnchainUserRole, string> = {
         governance: '/governance',
         approver: '/dashboard/approver',
-        verifier: '/dashboard',
+        verifier: '/dashboard/verifyer',
         citizen: '/dashboard/citizen',
       }
       navigate(roleRoutes[form.role], { replace: true })
