@@ -79,6 +79,39 @@ export async function uploadToIPFS(
   return { metadataCid: metaData.IpfsHash as string, fileCid };
 }
 
+export async function uploadJsonToIPFS(
+  payload: unknown,
+  fileName = "metadata.json"
+): Promise<string> {
+  if (!PINATA_JWT) {
+    throw new Error(
+      "VITE_PINATA_JWT is not set. Configure it in client/.env to enable IPFS uploads."
+    );
+  }
+
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {
+    type: "application/json",
+  });
+  const form = new FormData();
+  form.append("file", blob, fileName);
+  form.append("pinataMetadata", JSON.stringify({ name: fileName }));
+  form.append("pinataOptions", JSON.stringify({ cidVersion: 1 }));
+
+  const res = await fetch("https://api.pinata.cloud/pinning/pinFileToIPFS", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${PINATA_JWT}` },
+    body: form,
+  });
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`IPFS JSON upload failed: ${err}`);
+  }
+
+  const data = await res.json();
+  return data.IpfsHash as string;
+}
+
 export async function unpinFromIPFS(cid: string): Promise<void> {
   if (!PINATA_JWT || !cid) return;
 

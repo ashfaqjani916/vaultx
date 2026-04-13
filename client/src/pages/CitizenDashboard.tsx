@@ -1,3 +1,4 @@
+
 import { useState, useRef, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -8,7 +9,6 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { StatusBadge } from '@/components/StatusBadge'
 import { Progress } from '@/components/ui/progress'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -18,8 +18,7 @@ import { useOnchainClaimDefinitions } from '@/hooks/useOnchainClaimDefinitions'
 import { useOnchainClaimRequests } from '@/hooks/useOnchainClaimRequests'
 import { useOnchainCredentials } from '@/hooks/useOnchainCredentials'
 import { claimRequestStatusLabel, claimStatusLabel, credentialStatusLabel, parseSsiClaim } from '@/lib/ssiParsers'
-import { getCategoryByClaimType, type DocumentCategory } from '@/lib/documentCategories'
-import { uploadToIPFS } from '@/lib/ipfs'
+import { uploadJsonToIPFS, uploadToIPFS } from '@/lib/ipfs'
 import { isSsiContractConfigured, ssiChain, ssiContractAddress, thirdwebClient } from '@/lib/thirdweb'
 import { useQueries } from '@tanstack/react-query'
 import { getContract, prepareContractCall, readContract } from 'thirdweb'
@@ -128,69 +127,123 @@ export default function CitizenDashboard() {
   // ── Upload modal state ──────────────────────────────────────────────────
   const [uploadOpen, setUploadOpen] = useState(false)
   const [selectedClaimId, setSelectedClaimId] = useState('')
-  const [file, setFile] = useState<File | null>(null)
+  const [documentFile, setDocumentFile] = useState<File | null>(null)
+  const [photoFile, setPhotoFile] = useState<File | null>(null)
+  const [biometricFile, setBiometricFile] = useState<File | null>(null)
+  const [geoTag, setGeoTag] = useState('')
+  const [isLocating, setIsLocating] = useState(false)
   const [isDragging, setIsDragging] = useState(false)
-  const [fieldValues, setFieldValues] = useState<Record<string, string>>({})
   const [uploadProgress, setUploadProgress] = useState(0)
   const [isUploading, setIsUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const photoInputRef = useRef<HTMLInputElement>(null)
+  const biometricInputRef = useRef<HTMLInputElement>(null)
 
-  // Get the document category for the selected claim type
   const selectedDef = availableDefs.find((d) => d.id === selectedClaimId)
-  const category: DocumentCategory | undefined = selectedDef ? getCategoryByClaimType(selectedDef.name) : undefined
-
-  // ── Field handlers ──────────────────────────────────────────────────────
-  const setField = (key: string, value: string) => setFieldValues((prev) => ({ ...prev, [key]: value }))
 
   // ── Drag-and-drop handlers ──────────────────────────────────────────────
-  const handleDragOver = useCallback((e: React.DragEvent) => {
+  const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault()
     setIsDragging(true)
-  }, [])
+  }
 
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
+  const handleDragLeave = (e: React.DragEvent) => {
     e.preventDefault()
     setIsDragging(false)
-  }, [])
+  }
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
+  const handleDrop = (e: React.DragEvent) => {
     e.preventDefault()
     setIsDragging(false)
     const dropped = e.dataTransfer.files[0]
-    if (dropped) setFile(dropped)
-  }, [])
+    if (dropped) setDocumentFile(dropped)
+  }
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files?.[0]) return
-    setFile(e.target.files[0])
+    setDocumentFile(e.target.files[0])
     e.target.value = ''
+  }
+
+  const handlePhotoInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files?.[0]) return
+    setPhotoFile(e.target.files[0])
+    e.target.value = ''
+  }
+
+  const handleBiometricInput = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files?.[0]) return
+    setBiometricFile(e.target.files[0])
+    e.target.value = ''
+  }
+
+  const captureCurrentLocation = async () => {
+    if (!('geolocation' in navigator)) {
+      toast({
+        title: 'Location unavailable',
+        description: 'This browser does not support geolocation.',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    setIsLocating(true)
+    try {
+      const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: true,
+          timeout: 12_000,
+          maximumAge: 0,
+        })
+      })
+
+      const { latitude, longitude, accuracy } = position.coords
+      const formatted = `${latitude.toFixed(6)}, ${longitude.toFixed(6)} (±${Math.round(accuracy)}m)`
+      setGeoTag(formatted)
+      toast({
+        title: 'Location captured',
+        description: 'Geo coordinates were filled automatically.',
+      })
+    } catch {
+      toast({
+        title: 'Location capture failed',
+        description: 'Please allow location permission or enter coordinates manually.',
+        variant: 'destructive',
+      })
+    } finally {
+      setIsLocating(false)
+    }
   }
 
   const closeModal = () => {
     if (isUploading) return
     setUploadOpen(false)
-    setFile(null)
+    setDocumentFile(null)
+    setPhotoFile(null)
+    setBiometricFile(null)
+    setGeoTag('')
     setSelectedClaimId('')
-    setFieldValues({})
     setUploadProgress(0)
   }
 
   // ── Upload & Submit ─────────────────────────────────────────────────────
   const handleUpload = async () => {
     if (!isApproved) return
-    if (!file || !selectedClaimId || !did) return
+    if (!selectedClaimId || !did || !selectedDef) return
 
-    // Validate required fields
-    if (category) {
-      const missing = category.fields.filter((f) => f.required && !fieldValues[f.key]?.trim()).map((f) => f.label)
-      if (missing.length > 0) {
-        toast({
-          title: 'Missing required fields',
-          description: missing.join(', '),
-          variant: 'destructive',
-        })
-        return
-      }
+    const missingUploads: string[] = []
+    if (selectedDef.documentRequired && !documentFile) missingUploads.push('Document')
+    if (selectedDef.photoRequired && !photoFile) missingUploads.push('Photo')
+    if (selectedDef.biometricRequired && !biometricFile) missingUploads.push('Biometric')
+    if (selectedDef.geoRequired && !geoTag.trim()) missingUploads.push('Geo tag')
+
+    if (missingUploads.length > 0) {
+      toast({
+        title: 'Missing required inputs',
+        description: missingUploads.join(', '),
+        variant: 'destructive',
+      })
+      return
     }
 
     setIsUploading(true)
@@ -199,7 +252,50 @@ export default function CitizenDashboard() {
     try {
       // Step 1: Upload to IPFS
       setUploadProgress(20)
-      const { metadataCid } = await uploadToIPFS(file, fieldValues)
+      let documentHash = ''
+      let photoHash = ''
+      let geolocationHash = ''
+      let biometricHash = ''
+
+      if (documentFile) {
+        const { metadataCid } = await uploadToIPFS(documentFile, {
+          claimId: selectedClaimId,
+          claimType: selectedDef.name,
+          assetType: 'document',
+        })
+        documentHash = metadataCid
+      }
+
+      if (photoFile) {
+        const { metadataCid } = await uploadToIPFS(photoFile, {
+          claimId: selectedClaimId,
+          claimType: selectedDef.name,
+          assetType: 'photo',
+        })
+        photoHash = metadataCid
+      }
+
+      if (biometricFile) {
+        const { metadataCid } = await uploadToIPFS(biometricFile, {
+          claimId: selectedClaimId,
+          claimType: selectedDef.name,
+          assetType: 'biometric',
+        })
+        biometricHash = metadataCid
+      }
+
+      if (geoTag.trim()) {
+        geolocationHash = await uploadJsonToIPFS(
+          {
+            claimId: selectedClaimId,
+            claimType: selectedDef.name,
+            assetType: 'geotag',
+            value: geoTag.trim(),
+            uploadedAt: new Date().toISOString(),
+          },
+          `geo_${selectedClaimId}.json`,
+        )
+      }
       setUploadProgress(60)
 
       // Step 2: Submit claim request on-chain
@@ -211,7 +307,7 @@ export default function CitizenDashboard() {
         contract,
         method:
           'function createClaimRequest(string requestId, string claimId, string citizenDid, string documentHash, string photoHash, string geolocationHash, string biometricHash, uint256 expiresAt)',
-        params: [requestId, selectedClaimId, did, metadataCid, '', '', '', expiresAt],
+        params: [requestId, selectedClaimId, did, documentHash, photoHash, geolocationHash, biometricHash, expiresAt],
       })
 
       await sendAndConfirmTransactionAsync(transaction)
@@ -220,8 +316,8 @@ export default function CitizenDashboard() {
       addRequestId(requestId)
 
       toast({
-        title: 'Document submitted',
-        description: `Request ${requestId} created. IPFS CID: ${metadataCid.slice(0, 16)}...`,
+        title: 'Request submitted',
+        description: `Request ${requestId} created for ${selectedDef.name}.`,
       })
 
       await new Promise((r) => setTimeout(r, 400))
@@ -437,7 +533,7 @@ export default function CitizenDashboard() {
               <Upload className="h-4 w-4 text-primary" />
               Upload Document
             </DialogTitle>
-            <DialogDescription>Select a claim type, fill in the credential fields, and upload the supporting document. The file is stored on IPFS and the hash is recorded on-chain.</DialogDescription>
+            <DialogDescription>Select a claim type and upload only the artifacts required by that claim. Each uploaded artifact is stored on IPFS and its CID is recorded on-chain.</DialogDescription>
           </DialogHeader>
 
           <div className="space-y-5 mt-1">
@@ -453,7 +549,10 @@ export default function CitizenDashboard() {
                   value={selectedClaimId}
                   onValueChange={(v) => {
                     setSelectedClaimId(v)
-                    setFieldValues({})
+                    setDocumentFile(null)
+                    setPhotoFile(null)
+                    setBiometricFile(null)
+                    setGeoTag('')
                   }}
                   disabled={isUploading}
                 >
@@ -471,56 +570,24 @@ export default function CitizenDashboard() {
               )}
             </div>
 
-            {/* Dynamic credential fields */}
-            {category && (
-              <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="space-y-3">
-                <Label className="text-xs font-semibold block">{category.name} — Credential Fields</Label>
-                <p className="text-[11px] text-muted-foreground -mt-1">{category.description}</p>
-                <div className="grid gap-3">
-                  {category.fields.map((field) => (
-                    <div key={field.key}>
-                      <Label className="text-xs mb-1 block">
-                        {field.label}
-                        {field.required && <span className="text-destructive ml-0.5">*</span>}
-                      </Label>
-                      {field.type === 'select' && field.options ? (
-                        <Select value={fieldValues[field.key] || ''} onValueChange={(v) => setField(field.key, v)} disabled={isUploading}>
-                          <SelectTrigger className="h-9">
-                            <SelectValue placeholder={`Select ${field.label.toLowerCase()}`} />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {field.options.map((opt) => (
-                              <SelectItem key={opt} value={opt}>
-                                {opt}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      ) : (
-                        <Input
-                          type={field.type === 'date' ? 'date' : 'text'}
-                          className="h-9 text-xs"
-                          value={fieldValues[field.key] || ''}
-                          onChange={(e) => setField(field.key, e.target.value)}
-                          placeholder={field.placeholder || `Enter ${field.label.toLowerCase()}`}
-                          disabled={isUploading}
-                        />
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </motion.div>
-            )}
-
-            {/* No matching category fallback */}
-            {selectedClaimId && !category && (
+            {/* Claim requirements */}
+            {selectedDef && (
               <div className="rounded-lg bg-muted/50 border border-border p-3">
-                <p className="text-xs text-muted-foreground">No specific fields for this claim type. Upload the supporting document below.</p>
+                <p className="text-xs text-muted-foreground">
+                  Required by <span className="font-medium text-card-foreground">{selectedDef.name}</span>: {selectedDef.documentRequired ? 'Document' : ''}
+                  {selectedDef.documentRequired && selectedDef.photoRequired ? ', ' : ''}
+                  {selectedDef.photoRequired ? 'Photo' : ''}
+                  {(selectedDef.documentRequired || selectedDef.photoRequired) && selectedDef.geoRequired ? ', ' : ''}
+                  {selectedDef.geoRequired ? 'Geo tag' : ''}
+                  {(selectedDef.documentRequired || selectedDef.photoRequired || selectedDef.geoRequired) && selectedDef.biometricRequired ? ', ' : ''}
+                  {selectedDef.biometricRequired ? 'Biometric' : ''}
+                  {!selectedDef.documentRequired && !selectedDef.photoRequired && !selectedDef.geoRequired && !selectedDef.biometricRequired ? 'None (all optional)' : ''}
+                </p>
               </div>
             )}
 
-            {/* Drop zone */}
-            {selectedClaimId && (
+            {/* Document upload */}
+            {selectedClaimId && selectedDef?.documentRequired && (
               <div>
                 <Label className="text-xs mb-1.5 block">Upload Document *</Label>
                 <div
@@ -546,25 +613,135 @@ export default function CitizenDashboard() {
               </div>
             )}
 
-            {/* Selected file */}
+            {/* Photo upload */}
+            {selectedClaimId && selectedDef?.photoRequired && (
+              <div>
+                <Label className="text-xs mb-1.5 block">Upload Photo *</Label>
+                <div
+                  onClick={() => !isUploading && photoInputRef.current?.click()}
+                  className={[
+                    'relative border-2 border-dashed rounded-xl p-4 text-center transition-all',
+                    isUploading ? 'opacity-50 cursor-not-allowed border-border' : 'cursor-pointer border-border hover:border-primary/50 hover:bg-muted/30',
+                  ].join(' ')}
+                >
+                  <input ref={photoInputRef} type="file" className="hidden" onChange={handlePhotoInput} accept=".jpg,.jpeg,.png,.webp" disabled={isUploading} />
+                  <p className="text-xs text-muted-foreground">Click to select a photo (JPG, PNG, WEBP)</p>
+                </div>
+              </div>
+            )}
+
+            {/* Geotag input */}
+            {selectedClaimId && selectedDef?.geoRequired && (
+              <div>
+                <Label className="text-xs mb-1.5 block">Geo Tag *</Label>
+                <div className="flex gap-2">
+                  <Input className="h-9 text-xs" value={geoTag} onChange={(e) => setGeoTag(e.target.value)} placeholder="Enter coordinates or location text" disabled={isUploading || isLocating} />
+                  <Button type="button" variant="outline" className="h-9 text-xs" onClick={captureCurrentLocation} disabled={isUploading || isLocating}>
+                    {isLocating ? (
+                      <>
+                        <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                        Locating
+                      </>
+                    ) : (
+                      'Use current location'
+                    )}
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* Biometric upload */}
+            {selectedClaimId && selectedDef?.biometricRequired && (
+              <div>
+                <Label className="text-xs mb-1.5 block">Upload Biometric *</Label>
+                <div
+                  onClick={() => !isUploading && biometricInputRef.current?.click()}
+                  className={[
+                    'relative border-2 border-dashed rounded-xl p-4 text-center transition-all',
+                    isUploading ? 'opacity-50 cursor-not-allowed border-border' : 'cursor-pointer border-border hover:border-primary/50 hover:bg-muted/30',
+                  ].join(' ')}
+                >
+                  <input ref={biometricInputRef} type="file" className="hidden" onChange={handleBiometricInput} accept=".jpg,.jpeg,.png,.pdf" disabled={isUploading} />
+                  <p className="text-xs text-muted-foreground">Click to select biometric proof file</p>
+                </div>
+              </div>
+            )}
+
+            {/* Selected files */}
             <AnimatePresence>
-              {file && (
+              {documentFile && (
                 <motion.div
                   initial={{ opacity: 0, x: -8 }}
                   animate={{ opacity: 1, x: 0 }}
                   exit={{ opacity: 0, x: 8 }}
                   className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg bg-muted/60 border border-border"
                 >
-                  <FileIcon name={file.name} />
+                  <FileIcon name={documentFile.name} />
                   <div className="flex-1 min-w-0">
-                    <p className="text-xs font-medium text-card-foreground truncate">{file.name}</p>
-                    <p className="text-[10px] text-muted-foreground">{formatBytes(file.size)}</p>
+                    <p className="text-xs font-medium text-card-foreground truncate">Document: {documentFile.name}</p>
+                    <p className="text-[10px] text-muted-foreground">{formatBytes(documentFile.size)}</p>
                   </div>
                   {!isUploading && (
                     <button
                       onClick={(e) => {
                         e.stopPropagation()
-                        setFile(null)
+                        setDocumentFile(null)
+                      }}
+                      className="text-muted-foreground hover:text-destructive transition-colors shrink-0 p-0.5 rounded"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            <AnimatePresence>
+              {photoFile && (
+                <motion.div
+                  initial={{ opacity: 0, x: -8 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 8 }}
+                  className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg bg-muted/60 border border-border"
+                >
+                  <FileIcon name={photoFile.name} />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium text-card-foreground truncate">Photo: {photoFile.name}</p>
+                    <p className="text-[10px] text-muted-foreground">{formatBytes(photoFile.size)}</p>
+                  </div>
+                  {!isUploading && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setPhotoFile(null)
+                      }}
+                      className="text-muted-foreground hover:text-destructive transition-colors shrink-0 p-0.5 rounded"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  )}
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            <AnimatePresence>
+              {biometricFile && (
+                <motion.div
+                  initial={{ opacity: 0, x: -8 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: 8 }}
+                  className="flex items-center gap-2.5 px-3 py-2.5 rounded-lg bg-muted/60 border border-border"
+                >
+                  <FileIcon name={biometricFile.name} />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-medium text-card-foreground truncate">Biometric: {biometricFile.name}</p>
+                    <p className="text-[10px] text-muted-foreground">{formatBytes(biometricFile.size)}</p>
+                  </div>
+                  {!isUploading && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setBiometricFile(null)
                       }}
                       className="text-muted-foreground hover:text-destructive transition-colors shrink-0 p-0.5 rounded"
                     >
@@ -602,7 +779,7 @@ export default function CitizenDashboard() {
               <Button variant="outline" className="flex-1" onClick={closeModal} disabled={isUploading}>
                 Cancel
               </Button>
-              <Button className="flex-1 gradient-primary text-primary-foreground" disabled={!isApproved || !file || !selectedClaimId || isUploading || isTxPending} onClick={handleUpload}>
+              <Button className="flex-1 gradient-primary text-primary-foreground" disabled={!isApproved || !selectedClaimId || isUploading || isTxPending} onClick={handleUpload}>
                 {isUploading ? (
                   <>
                     <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
