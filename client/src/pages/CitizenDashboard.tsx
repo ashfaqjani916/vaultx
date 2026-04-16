@@ -2,11 +2,12 @@
 import { useState, useRef, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Hexagon, Upload, FileText, FileImage, File, X, CheckCircle2, Clock, Shield, Plus, Eye, Fingerprint, AlertCircle, FolderOpen, Loader2, Hash, Award, LogOut } from 'lucide-react'
+import { Hexagon, Upload, FileText, FileImage, File, X, CheckCircle2, Clock, Shield, Plus, Eye, Fingerprint, AlertCircle, FolderOpen, Loader2, Hash, Award, LogOut, QrCode, ScanLine } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
 import { StatusBadge } from '@/components/StatusBadge'
 import { Progress } from '@/components/ui/progress'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
@@ -23,6 +24,7 @@ import { isSsiContractConfigured, ssiChain, ssiContractAddress, thirdwebClient }
 import { useQueries } from '@tanstack/react-query'
 import { getContract, prepareContractCall, readContract } from 'thirdweb'
 import { useActiveWallet, useDisconnect, useReadContract, useSendAndConfirmTransaction } from 'thirdweb/react'
+import { parseVerificationQrPayload, type VerificationQrPayload } from '@/lib/verificationQr'
 import { ClaimRow } from './Governance'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -46,6 +48,19 @@ const cardAnim = (i: number) => ({
   animate: { opacity: 1, y: 0 },
   transition: { duration: 0.28, delay: i * 0.07 },
 })
+
+type BarcodeDetectorResult = { rawValue?: string }
+
+type BarcodeDetectorInstance = {
+  detect: (source: ImageBitmapSource) => Promise<BarcodeDetectorResult[]>
+}
+
+type BarcodeDetectorConstructor = new (options?: { formats?: string[] }) => BarcodeDetectorInstance
+
+function formatUnixTime(timestamp: number) {
+  if (!timestamp) return '—'
+  return new Date(timestamp * 1000).toLocaleString()
+}
 
 // ── Component ─────────────────────────────────────────────────────────────────
 export default function CitizenDashboard() {
@@ -123,6 +138,25 @@ export default function CitizenDashboard() {
 
   const myRequests = useMemo(() => requests.filter((r) => r.citizenDid === did), [requests, did])
   const activeCredentials = useMemo(() => credentials.filter((c) => c.status === 0), [credentials])
+  const activeCredentialClaimIds = useMemo(() => new Set(activeCredentials.map((credential) => credential.claimId)), [activeCredentials])
+
+  const [qrPayloadInput, setQrPayloadInput] = useState('')
+  const [decodedQrPayload, setDecodedQrPayload] = useState<VerificationQrPayload | null>(null)
+  const [qrScanError, setQrScanError] = useState<string | null>(null)
+  const [isDecodingQrImage, setIsDecodingQrImage] = useState(false)
+  const qrFileInputRef = useRef<HTMLInputElement>(null)
+
+  const requestedQrClaims = useMemo(() => {
+    if (!decodedQrPayload) return []
+    return decodedQrPayload.requestedClaims.map((claimId) => {
+      const definition = availableDefs.find((item) => item.id === claimId)
+      return {
+        claimId,
+        definition,
+        inWallet: activeCredentialClaimIds.has(claimId),
+      }
+    })
+  }, [decodedQrPayload, availableDefs, activeCredentialClaimIds])
 
   // ── Upload modal state ──────────────────────────────────────────────────
   const [uploadOpen, setUploadOpen] = useState(false)
@@ -212,6 +246,54 @@ export default function CitizenDashboard() {
       })
     } finally {
       setIsLocating(false)
+    }
+  }
+
+  const parseQrInput = useCallback((rawValue: string) => {
+    const { payload, error } = parseVerificationQrPayload(rawValue)
+    setQrPayloadInput(rawValue)
+    setDecodedQrPayload(payload)
+    setQrScanError(error)
+  }, [])
+
+  const handleDecodeQrImage = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+
+    if (!file) return
+
+    const detectorWindow = window as typeof window & {
+      BarcodeDetector?: BarcodeDetectorConstructor
+    }
+
+    if (!detectorWindow.BarcodeDetector) {
+      setQrScanError('QR image decoding is not supported in this browser. Paste the scanned payload JSON instead.')
+      return
+    }
+
+    setIsDecodingQrImage(true)
+    setQrScanError(null)
+
+    let bitmap: ImageBitmap | null = null
+
+    try {
+      bitmap = await createImageBitmap(file)
+      const detector = new detectorWindow.BarcodeDetector({ formats: ['qr_code'] })
+      const [result] = await detector.detect(bitmap)
+
+      if (!result?.rawValue) {
+        setDecodedQrPayload(null)
+        setQrScanError('No QR code was detected in that image. Try a clearer screenshot or paste the payload.')
+        return
+      }
+
+      parseQrInput(result.rawValue)
+    } catch (error) {
+      setDecodedQrPayload(null)
+      setQrScanError(error instanceof Error ? error.message : 'Failed to decode the QR image.')
+    } finally {
+      bitmap?.close()
+      setIsDecodingQrImage(false)
     }
   }
 
@@ -416,9 +498,120 @@ export default function CitizenDashboard() {
             </motion.div>
           )}
 
+          <motion.div {...cardAnim(1)}>
+            <Card className="p-6 shadow-card border-border bg-card">
+              <div className="flex items-start justify-between gap-4 mb-4">
+                <div>
+                  <h2 className="text-base font-semibold">Scan Verifier QR</h2>
+                  <p className="text-sm text-muted-foreground mt-1">Scan or paste a verifier QR payload to see which credentials are being requested from your wallet.</p>
+                </div>
+                <ScanLine className="h-5 w-5 text-primary shrink-0" />
+              </div>
+
+              <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+                <div className="space-y-3">
+                  <input
+                    ref={qrFileInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handleDecodeQrImage}
+                  />
+
+                  <div>
+                    <Label className="text-xs">QR Payload</Label>
+                    <Textarea
+                      value={qrPayloadInput}
+                      onChange={(event) => setQrPayloadInput(event.target.value)}
+                      placeholder='Paste scanned QR JSON here, for example: {"verificationRequestId":"vreq-...","requestedClaims":["claim-1"]}'
+                      className="mt-1 min-h-[148px] text-xs font-mono"
+                    />
+                  </div>
+
+                  <div className="flex flex-wrap gap-2">
+                    <Button type="button" variant="outline" onClick={() => qrFileInputRef.current?.click()} disabled={isDecodingQrImage}>
+                      {isDecodingQrImage ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+                          Decoding QR...
+                        </>
+                      ) : (
+                        <>
+                          <ScanLine className="h-4 w-4 mr-1.5" />
+                          Scan QR Image
+                        </>
+                      )}
+                    </Button>
+                    <Button type="button" className="gradient-primary text-primary-foreground" onClick={() => parseQrInput(qrPayloadInput)}>
+                      <QrCode className="h-4 w-4 mr-1.5" />
+                      Read Request
+                    </Button>
+                  </div>
+
+                  {qrScanError && (
+                    <div className="flex items-start gap-2 text-xs text-destructive bg-destructive/10 border border-destructive/20 rounded-md px-3 py-2.5">
+                      <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                      <span>{qrScanError}</span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="rounded-xl border border-border bg-muted/20 p-4 space-y-4">
+                  <div>
+                    <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Decoded Request</p>
+                    <p className="text-sm font-medium text-card-foreground mt-1">
+                      {decodedQrPayload ? decodedQrPayload.verificationRequestId : 'No QR request loaded'}
+                    </p>
+                  </div>
+
+                  {decodedQrPayload ? (
+                    <div className="space-y-4">
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <div>
+                          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Verifier DID</p>
+                          <p className="text-xs font-mono text-card-foreground break-all mt-1">{decodedQrPayload.verifierDid}</p>
+                        </div>
+                        <div>
+                          <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Expires</p>
+                          <p className="text-xs text-card-foreground mt-1">{formatUnixTime(decodedQrPayload.expiresAt)}</p>
+                        </div>
+                      </div>
+
+                      <div>
+                        <p className="text-[11px] uppercase tracking-wide text-muted-foreground mb-2">Requested Credentials</p>
+                        <div className="space-y-2">
+                          {requestedQrClaims.map(({ claimId, definition, inWallet }) => (
+                            <div key={claimId} className="rounded-lg border border-border bg-background px-3 py-3">
+                              <div className="flex items-start justify-between gap-3">
+                                <div>
+                                  <p className="text-sm font-medium text-card-foreground">{definition?.name || claimId}</p>
+                                  <p className="text-[11px] font-mono text-muted-foreground break-all mt-0.5">{claimId}</p>
+                                  {definition?.description && (
+                                    <p className="text-xs text-muted-foreground mt-1">{definition.description}</p>
+                                  )}
+                                </div>
+                                <StatusBadge status={inWallet ? 'active' : 'pending'} />
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-lg border border-dashed border-border bg-background/60 p-5 text-center">
+                      <QrCode className="h-8 w-8 text-muted-foreground/40 mx-auto mb-3" />
+                      <p className="text-sm font-medium text-card-foreground">Scan a verifier QR to inspect the request</p>
+                      <p className="text-xs text-muted-foreground mt-1">You’ll see every requested credential here and whether it already exists in your wallet.</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </Card>
+          </motion.div>
+
           {/* ── Credentials section ── */}
           {activeCredentials.length > 0 && (
-            <motion.div {...cardAnim(1)} className="space-y-3">
+            <motion.div {...cardAnim(2)} className="space-y-3">
               <div className="flex items-center justify-between">
                 <h2 className="font-semibold text-sm flex items-center gap-2">
                   <Award className="h-4 w-4 text-primary" />
@@ -453,7 +646,7 @@ export default function CitizenDashboard() {
           )}
 
           {/* ── Claim Requests section ── */}
-          <motion.div {...cardAnim(2)} className="space-y-3">
+          <motion.div {...cardAnim(3)} className="space-y-3">
             <div className="flex items-center justify-between">
               <h2 className="font-semibold text-sm flex items-center gap-2">
                 <Eye className="h-4 w-4 text-primary" />

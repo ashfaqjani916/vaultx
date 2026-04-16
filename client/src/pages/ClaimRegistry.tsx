@@ -124,21 +124,14 @@ export default function ClaimRegistry() {
 
     try {
       await writeByName("createClaim", [
-        {
-          claimId,
-          claimType: form.name.trim(),
-          description: form.description.trim(),
-          documentRequired: form.requiredDocs.trim().length > 0,
-          photoRequired: form.photoRequired,
-          geolocationRequired: form.geoRequired,
-          biometricRequired: form.biometricRequired,
-          numberOfApprovalsNeeded: BigInt(form.approvalsNeeded),
-          status: 0,
-          createdAt: now,
-          approvedAt: 0n,
-          createdByDid: actorDid,
-          approvedByDid: "",
-        },
+        claimId,
+        form.name.trim(),
+        form.description.trim(),
+        form.requiredDocs.trim().length > 0,
+        form.photoRequired,
+        form.geoRequired,
+        form.biometricRequired,
+        BigInt(form.approvalsNeeded),
       ]);
 
       const nextIds = [claimId, ...claimIds.filter((id) => id !== claimId)];

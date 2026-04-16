@@ -1,5 +1,5 @@
-const USER_TUPLE =
-  "(string did,string signingPublicKey,string encryptionPublicKey,address wallet,uint8 role,bool active,uint256 createdAt,uint256 updatedAt,uint256 revokedAt,string createdByDid,string revokedByDid)";
+const PUBLIC_USER_TUPLE =
+  "(string did,address wallet,uint8 role,bool active,bool isApproved,string revokedByDid)";
 const CLAIM_TUPLE =
   "(string claimId,string claimType,string description,bool documentRequired,bool photoRequired,bool geolocationRequired,bool biometricRequired,uint256 numberOfApprovalsNeeded,uint8 status,uint256 createdAt,uint256 approvedAt,string createdByDid,string approvedByDid)";
 const CLAIM_REQUEST_TUPLE =
@@ -7,32 +7,36 @@ const CLAIM_REQUEST_TUPLE =
 const VERIFICATION_TUPLE =
   "(string verificationId,string requestId,string approverDid,uint8 status,string remarks,uint256 verifiedAt)";
 const CREDENTIAL_TUPLE =
-  "(string credentialId,string claimId,string requestId,string citizenDid,string credentialHash,uint8 status,uint256 issuedAt,uint256 expiresAt,uint256 revokedAt,string[] signatures)";
+  "(string credentialId,string claimId,string requestId,string citizenDid,string credentialHash,uint8 status,uint256 issuedAt,uint256 expiresAt,uint256 revokedAt,bytes[] signatures)";
 const CREDENTIAL_REVOCATION_TUPLE =
   "(string credentialId,string revokedByDid,string reason,uint256 revokedAt)";
 const VERIFICATION_REQUEST_TUPLE =
-  "(string verificationRequestId,string verifierDid,string citizenDid,string[] requestedClaims,uint8 status,uint256 createdAt,uint256 expiresAt)";
+  "(string verificationRequestId,string verifierDid,string citizenDid,string[] requestedClaims,string nonce,uint8 status,uint256 createdAt,uint256 expiresAt,string presentationId,bool fulfilled)";
 const PRESENTATION_TUPLE =
-  "(string presentationId,string verificationRequestId,string citizenDid,string verifierDid,string[] credentialIds,string proof,string nonce,uint256 createdAt,uint256 expiresAt)";
+  "(string presentationId,string verificationRequestId,string citizenDid,string verifierDid,string[] credentialIds,bytes citizenSignature,string nonce,uint256 createdAt,uint256 expiresAt,bool verified)";
 const APPROVAL_TUPLE = "(string approverDid,bool approved,uint256 approvedAt)";
 
 export const ssiMethods = {
   owner: "function owner() view returns (address)",
-  registerUser: `function registerUser(${USER_TUPLE} user)`,
+  registerUser:
+    "function registerUser(string did,string signingPublicKey,string encryptionPublicKey,uint8 role)",
   userAddressToDId:
     "function userAddressToDId(address wallet) view returns (string)",
-  getUser: `function getUser(string did) view returns ${USER_TUPLE}`,
+  getUser: `function getUser(address userAddress) view returns ${PUBLIC_USER_TUPLE}`,
   deactivateUser: "function deactivateUser(string did)",
-  updateUser: `function updateUser(${USER_TUPLE} user)`,
+  updateUser:
+    "function updateUser((string did,string signingPublicKey,string encryptionPublicKey,address wallet,uint8 role,bool active,bool isApproved,uint256 createdAt,uint256 updatedAt,uint256 revokedAt,string createdByDid,string revokedByDid) user)",
 
-  createClaim: `function createClaim(${CLAIM_TUPLE} claim)`,
+  createClaim:
+    "function createClaim(string claimId,string claimType,string description,bool documentRequired,bool photoRequired,bool geolocationRequired,bool biometricRequired,uint256 numberOfApprovalsNeeded)",
   getClaim: `function getClaim(string claimId) view returns ${CLAIM_TUPLE}`,
   getAllClaimIds:
     "function getAllClaimIds() view returns (string[])",
   approveClaim: "function approveClaim(string claimId,string governanceDid)",
   rejectClaim: "function rejectClaim(string claimId,string governanceDid)",
 
-  createClaimRequest: `function createClaimRequest(${CLAIM_REQUEST_TUPLE} request)`,
+  createClaimRequest:
+    "function createClaimRequest(string requestId,string claimId,string citizenDid,string documentHash,string photoHash,string geolocationHash,string biometricHash,uint256 expiresAt)",
   getClaimRequest: `function getClaimRequest(string requestId) view returns ${CLAIM_REQUEST_TUPLE}`,
   reviewClaimRequest:
     "function reviewClaimRequest(string requestId,string approverDid)",
@@ -60,8 +64,7 @@ export const ssiMethods = {
   getVerificationRequest: `function getVerificationRequest(string requestId) view returns ${VERIFICATION_REQUEST_TUPLE}`,
 
   submitPresentation: `function submitPresentation(${PRESENTATION_TUPLE} presentation)`,
-  verifyPresentation:
-    "function verifyPresentation(string presentationId) view returns (bool)",
+  verifyPresentation: "function verifyPresentation(string presentationId) returns (bool)",
 
   getApprovals: `function getApprovals(string requestId) view returns (${APPROVAL_TUPLE}[])`,
 

@@ -2,15 +2,17 @@ import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { QRCodeSVG } from 'qrcode.react'
-import { AlertCircle, Hexagon, Loader2, LogOut, QrCode, ScanLine, ShieldCheck } from 'lucide-react'
+import { AlertCircle, FileBadge2, Hexagon, Loader2, LogOut, QrCode, ShieldCheck } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Textarea } from '@/components/ui/textarea'
 import { useActiveWallet, useDisconnect } from 'thirdweb/react'
 import { useOnchainUser } from '@/hooks/useOnchainUser'
+import { useOnchainClaimDefinitions } from '@/hooks/useOnchainClaimDefinitions'
 import { useSSIWrite } from '@/hooks/useSSIContract'
+import { buildVerificationQrPayload, type VerificationQrPayload } from '@/lib/verificationQr'
 
 const cardAnim = (i: number) => ({
   initial: { opacity: 0, y: 10 },
@@ -18,59 +20,54 @@ const cardAnim = (i: number) => ({
   transition: { duration: 0.28, delay: i * 0.08 },
 })
 
+const formatUnixTime = (timestamp: number) => {
+  if (!timestamp) return '—'
+  return new Date(timestamp * 1000).toLocaleString()
+}
+
 export default function VerifyerDashboard() {
   const navigate = useNavigate()
   const activeWallet = useActiveWallet()
   const { disconnect } = useDisconnect()
   const { did } = useOnchainUser()
-  const { write, isPending } = useSSIWrite()
+  const { definitions, isLoading: claimsLoading } = useOnchainClaimDefinitions()
+  const { writeByName, isPending } = useSSIWrite()
 
   const handleSignOut = () => {
     if (activeWallet) disconnect(activeWallet)
     navigate('/', { replace: true })
   }
 
-  const [citizenDid, setCitizenDid] = useState('')
-  const [requestedClaimsText, setRequestedClaimsText] = useState('')
+  const activeClaims = useMemo(
+    () => definitions.filter((definition) => definition.status === 1),
+    [definitions],
+  )
+
+  const [selectedClaimIds, setSelectedClaimIds] = useState<string[]>([])
   const [expiryHours, setExpiryHours] = useState('24')
   const [creatingRequest, setCreatingRequest] = useState(false)
   const [requestError, setRequestError] = useState<string | null>(null)
-  const [generatedQrPayload, setGeneratedQrPayload] = useState('')
-  const [generatedRequestId, setGeneratedRequestId] = useState('')
+  const [generatedRequest, setGeneratedRequest] = useState<VerificationQrPayload | null>(null)
 
-  const [scannedQrText, setScannedQrText] = useState('')
-  const [verifyError, setVerifyError] = useState<string | null>(null)
-  const [verifySuccess, setVerifySuccess] = useState<string | null>(null)
-  const [verifyingPresentation, setVerifyingPresentation] = useState(false)
-
-  const parsedClaims = useMemo(
+  const selectedClaims = useMemo(
+    () => activeClaims.filter((claim) => selectedClaimIds.includes(claim.claimId)),
+    [activeClaims, selectedClaimIds],
+  )
+  const generatedClaimDetails = useMemo(
     () =>
-      requestedClaimsText
-        .split(',')
-        .map((value) => value.trim())
-        .filter((value) => value.length > 0),
-    [requestedClaimsText],
+      generatedRequest
+        ? activeClaims.filter((claim) => generatedRequest.requestedClaims.includes(claim.claimId))
+        : [],
+    [activeClaims, generatedRequest],
   )
 
-  const scannedPayload = useMemo(() => {
-    try {
-      return JSON.parse(scannedQrText) as Record<string, unknown>
-    } catch {
-      return null
-    }
-  }, [scannedQrText])
-
-  const scannedCredentialIds = useMemo(() => {
-    if (!scannedPayload) return []
-    const ids = scannedPayload.credentialIds
-    return Array.isArray(ids) ? ids.map(String) : []
-  }, [scannedPayload])
-
-  const scannedPresentationId = useMemo(() => {
-    if (!scannedPayload) return ''
-    const value = scannedPayload.presentationId
-    return typeof value === 'string' ? value : ''
-  }, [scannedPayload])
+  const toggleClaimSelection = (claimId: string) => {
+    setSelectedClaimIds((current) =>
+      current.includes(claimId)
+        ? current.filter((selectedId) => selectedId !== claimId)
+        : [...current, claimId],
+    )
+  }
 
   const createVerificationRequest = async () => {
     setRequestError(null)
@@ -80,85 +77,55 @@ export default function VerifyerDashboard() {
       return
     }
 
-    if (!citizenDid.trim()) {
-      setRequestError('Citizen DID is required.')
+    if (selectedClaimIds.length === 0) {
+      setRequestError('Select at least one credential to request in the QR.')
       return
     }
 
-    if (parsedClaims.length === 0) {
-      setRequestError('Enter at least one requested claim.')
+    const hours = Number(expiryHours || '24')
+    if (!Number.isFinite(hours) || hours < 1) {
+      setRequestError('Expiry hours must be at least 1.')
       return
     }
 
     setCreatingRequest(true)
     try {
       const requestId = `vreq-${Date.now()}`
-      const nonce = `nonce-${Math.random().toString(36).slice(2, 10)}`
-      const now = Math.floor(Date.now() / 1000)
-      const hours = Number(expiryHours || '24')
-      const expiresAt = now + Math.max(1, hours) * 60 * 60
+      const nonce =
+        typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+          ? crypto.randomUUID()
+          : `nonce-${Math.random().toString(36).slice(2, 10)}`
+      const createdAt = Math.floor(Date.now() / 1000)
+      const expiresAt = createdAt + Math.max(1, Math.floor(hours)) * 60 * 60
 
-      await write({
-        method:
-          'function createVerificationRequest((string verificationRequestId,string verifierDid,string citizenDid,string[] requestedClaims,string nonce,uint8 status,uint256 createdAt,uint256 expiresAt,bool fulfilled) request)',
-        params: [
-          {
-            verificationRequestId: requestId,
-            verifierDid: did,
-            citizenDid: citizenDid.trim(),
-            requestedClaims: parsedClaims,
-            nonce,
-            status: 0,
-            createdAt: BigInt(now),
-            expiresAt: BigInt(expiresAt),
-            fulfilled: false,
-          },
-        ],
-      })
+      await writeByName('createVerificationRequest', [
+        {
+          verificationRequestId: requestId,
+          verifierDid: did,
+          citizenDid: '',
+          requestedClaims: selectedClaimIds,
+          nonce,
+          status: 0,
+          createdAt: BigInt(createdAt),
+          expiresAt: BigInt(expiresAt),
+          presentationId: '',
+          fulfilled: false,
+        },
+      ])
 
-      const qrPayload = JSON.stringify({
+      setGeneratedRequest({
         verificationRequestId: requestId,
         verifierDid: did,
-        citizenDid: citizenDid.trim(),
-        requestedClaims: parsedClaims,
+        citizenDid: '',
+        requestedClaims: selectedClaimIds,
         nonce,
+        createdAt,
         expiresAt,
       })
-
-      setGeneratedRequestId(requestId)
-      setGeneratedQrPayload(qrPayload)
     } catch (error) {
       setRequestError(error instanceof Error ? error.message : 'Failed to create verification request.')
     } finally {
       setCreatingRequest(false)
-    }
-  }
-
-  const verifyFromScannedQr = async () => {
-    setVerifyError(null)
-    setVerifySuccess(null)
-
-    if (!scannedPayload) {
-      setVerifyError('Invalid QR payload JSON. Paste valid scanned content.')
-      return
-    }
-
-    if (!scannedPresentationId) {
-      setVerifyError('presentationId is missing in scanned payload.')
-      return
-    }
-
-    setVerifyingPresentation(true)
-    try {
-      await write({
-        method: 'function verifyPresentation(string presentationId) returns (bool)',
-        params: [scannedPresentationId],
-      })
-      setVerifySuccess(`Presentation verification submitted: ${scannedPresentationId}`)
-    } catch (error) {
-      setVerifyError(error instanceof Error ? error.message : 'Failed to verify presentation.')
-    } finally {
-      setVerifyingPresentation(false)
     }
   }
 
@@ -182,39 +149,73 @@ export default function VerifyerDashboard() {
         <div className="max-w-5xl mx-auto space-y-8">
           <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}>
             <h1 className="text-2xl font-bold tracking-tight">Verifyer Dashboard</h1>
-            <p className="text-sm text-muted-foreground mt-1">Create verification requests and identify user credentials through QR payloads.</p>
+            <p className="text-sm text-muted-foreground mt-1">Select the credentials you want to verify, create an on-chain request, and generate a QR for the citizen dashboard to scan.</p>
           </motion.div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <motion.div {...cardAnim(0)}>
               <Card className="p-6 shadow-card border-border bg-card h-full flex flex-col">
-                <div className="flex items-start justify-between mb-4">
+                <div className="flex items-start justify-between mb-4 gap-4">
                   <div>
-                    <h2 className="text-base font-semibold">Raise Verification Request</h2>
-                    <p className="text-sm text-muted-foreground mt-1">Create an on-chain verification request and generate a QR for the user.</p>
+                    <h2 className="text-base font-semibold">Create Verification QR</h2>
+                    <p className="text-sm text-muted-foreground mt-1">Requested credentials are loaded from the blockchain claim registry.</p>
                   </div>
-                  <ShieldCheck className="h-5 w-5 text-primary" />
+                  <ShieldCheck className="h-5 w-5 text-primary shrink-0" />
                 </div>
 
-                <div className="space-y-3">
+                <div className="space-y-4">
                   <div>
                     <Label className="text-xs">Verifier DID</Label>
                     <Input value={did ?? ''} readOnly className="mt-1" />
                   </div>
+
                   <div>
-                    <Label className="text-xs">Citizen DID</Label>
-                    <Input value={citizenDid} onChange={(e) => setCitizenDid(e.target.value)} placeholder="did:ssi:..." className="mt-1" />
+                    <div className="flex items-center justify-between gap-3 mb-2">
+                      <Label className="text-xs">Verifiable Credentials Required</Label>
+                      <span className="text-[11px] text-muted-foreground">{selectedClaimIds.length} selected</span>
+                    </div>
+
+                    <div className="rounded-lg border border-border divide-y divide-border overflow-hidden max-h-[320px] overflow-y-auto">
+                      {claimsLoading ? (
+                        <div className="flex items-center gap-2 px-3 py-4 text-xs text-muted-foreground">
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                          Loading credentials from chain...
+                        </div>
+                      ) : activeClaims.length === 0 ? (
+                        <div className="px-3 py-4 text-xs text-muted-foreground">
+                          No active credentials are available yet. Ask governance to approve claim definitions first.
+                        </div>
+                      ) : (
+                        activeClaims.map((claim) => (
+                          <label key={claim.claimId} className="flex items-start gap-3 px-3 py-3 cursor-pointer hover:bg-muted/30 transition-colors">
+                            <Checkbox
+                              checked={selectedClaimIds.includes(claim.claimId)}
+                              onCheckedChange={() => toggleClaimSelection(claim.claimId)}
+                              className="mt-0.5"
+                            />
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium text-card-foreground">{claim.claimType}</p>
+                              <p className="text-[11px] text-muted-foreground font-mono break-all">{claim.claimId}</p>
+                              {claim.description && (
+                                <p className="text-xs text-muted-foreground mt-1">{claim.description}</p>
+                              )}
+                            </div>
+                          </label>
+                        ))
+                      )}
+                    </div>
                   </div>
-                  <div>
-                    <Label className="text-xs">Requested Claims (comma separated)</Label>
-                    <Input value={requestedClaimsText} onChange={(e) => setRequestedClaimsText(e.target.value)} placeholder="KYC, Address, Employment" className="mt-1" />
-                  </div>
+
                   <div>
                     <Label className="text-xs">Expiry (hours)</Label>
                     <Input value={expiryHours} onChange={(e) => setExpiryHours(e.target.value)} type="number" min={1} className="mt-1" />
                   </div>
 
-                  <Button onClick={createVerificationRequest} disabled={creatingRequest || isPending} className="w-full gradient-primary text-primary-foreground">
+                  <Button
+                    onClick={createVerificationRequest}
+                    disabled={creatingRequest || isPending || activeClaims.length === 0}
+                    className="w-full gradient-primary text-primary-foreground"
+                  >
                     {creatingRequest || isPending ? (
                       <>
                         <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
@@ -234,69 +235,57 @@ export default function VerifyerDashboard() {
                       <span>{requestError}</span>
                     </div>
                   )}
-
-                  {generatedQrPayload && (
-                    <div className="rounded-lg border border-border bg-muted/30 p-3 space-y-3">
-                      <p className="text-xs text-muted-foreground break-all">Request ID: {generatedRequestId}</p>
-                      <div className="bg-background rounded-md border border-border p-3 flex justify-center">
-                        <QRCodeSVG value={generatedQrPayload} size={180} />
-                      </div>
-                    </div>
-                  )}
                 </div>
               </Card>
             </motion.div>
 
             <motion.div {...cardAnim(1)}>
               <Card className="p-6 shadow-card border-border bg-card h-full flex flex-col">
-                <div className="flex items-start justify-between mb-4">
+                <div className="flex items-start justify-between mb-4 gap-4">
                   <div>
-                    <h2 className="text-base font-semibold">Scan User QR</h2>
-                    <p className="text-sm text-muted-foreground mt-1">Paste scanned QR payload JSON to identify credential IDs and verify presentation on-chain.</p>
+                    <h2 className="text-base font-semibold">Generated Request</h2>
+                    <p className="text-sm text-muted-foreground mt-1">Share this QR with the citizen so they can review the requested credentials in their dashboard.</p>
                   </div>
-                  <ScanLine className="h-5 w-5 text-primary" />
+                  <FileBadge2 className="h-5 w-5 text-primary shrink-0" />
                 </div>
 
-                <div className="space-y-3">
-                  <div>
-                    <Label className="text-xs">Scanned QR Payload (JSON)</Label>
-                    <Textarea
-                      value={scannedQrText}
-                      onChange={(e) => setScannedQrText(e.target.value)}
-                      placeholder='{"presentationId":"pres-...","credentialIds":["cred_1","cred_2"]}'
-                      className="mt-1 min-h-[140px]"
-                    />
+                {generatedRequest ? (
+                  <div className="space-y-4">
+                    <div className="bg-background rounded-md border border-border p-4 flex justify-center">
+                      <QRCodeSVG value={buildVerificationQrPayload(generatedRequest)} size={210} />
+                    </div>
+
+                    <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-3">
+                      <div>
+                        <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Request ID</p>
+                        <p className="text-xs font-mono break-all text-card-foreground">{generatedRequest.verificationRequestId}</p>
+                      </div>
+                      <div>
+                        <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Expires</p>
+                        <p className="text-xs text-card-foreground">{formatUnixTime(generatedRequest.expiresAt)}</p>
+                      </div>
+                      <div>
+                        <p className="text-[11px] uppercase tracking-wide text-muted-foreground mb-2">Requested Credentials</p>
+                        <div className="space-y-2">
+                          {generatedClaimDetails.map((claim) => (
+                            <div key={claim.claimId} className="rounded-md border border-border bg-background px-3 py-2">
+                              <p className="text-xs font-medium text-card-foreground">{claim.claimType}</p>
+                              <p className="text-[11px] text-muted-foreground font-mono break-all">{claim.claimId}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
                   </div>
-
-                  <div className="rounded-lg border border-border bg-muted/30 p-3 space-y-2">
-                    <p className="text-xs font-medium">Identified Credentials</p>
-                    {scannedCredentialIds.length > 0 ? (
-                      scannedCredentialIds.map((id) => (
-                        <p key={id} className="text-xs text-muted-foreground break-all">
-                          {id}
-                        </p>
-                      ))
-                    ) : (
-                      <p className="text-xs text-muted-foreground">No credentialIds found yet.</p>
-                    )}
+                ) : (
+                  <div className="flex-1 rounded-lg border border-dashed border-border bg-muted/20 p-6 flex flex-col items-center justify-center text-center">
+                    <QrCode className="h-8 w-8 text-muted-foreground/40 mb-3" />
+                    <p className="text-sm font-medium text-card-foreground">No QR generated yet</p>
+                    <p className="text-xs text-muted-foreground mt-1 max-w-sm">
+                      Select one or more credentials from the blockchain list and create a verification request to render the QR here.
+                    </p>
                   </div>
-                </div>
-
-                <div className="mt-auto pt-3">
-                  <Button onClick={verifyFromScannedQr} disabled={verifyingPresentation || isPending} className="w-full" variant="outline">
-                    {verifyingPresentation || isPending ? (
-                      <>
-                        <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
-                        Verifying...
-                      </>
-                    ) : (
-                      'Verify Presentation from QR'
-                    )}
-                  </Button>
-
-                  {verifyError && <p className="text-xs text-destructive mt-2">{verifyError}</p>}
-                  {verifySuccess && <p className="text-xs text-emerald-600 mt-2">{verifySuccess}</p>}
-                </div>
+                )}
               </Card>
             </motion.div>
           </div>

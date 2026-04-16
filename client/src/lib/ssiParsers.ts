@@ -219,10 +219,13 @@ export type SsiVerificationRequest = {
   verifierDid: string;
   citizenDid: string;
   requestedClaims: string[];
+  nonce: string;
   /** 0=REQUESTED 1=APPROVED 2=REJECTED */
   status: number;
   createdAt: bigint;
   expiresAt: bigint;
+  presentationId: string;
+  fulfilled: boolean;
 };
 
 export function parseSsiVerificationRequest(raw: unknown): SsiVerificationRequest {
@@ -231,9 +234,12 @@ export function parseSsiVerificationRequest(raw: unknown): SsiVerificationReques
     verifierDid: String(pick(raw, "verifierDid", 1, "")),
     citizenDid: String(pick(raw, "citizenDid", 2, "")),
     requestedClaims: asStringArray(pick(raw, "requestedClaims", 3, [])),
-    status: Number(pick(raw, "status", 4, 0)),
-    createdAt: asBigInt(pick(raw, "createdAt", 5, 0n)),
-    expiresAt: asBigInt(pick(raw, "expiresAt", 6, 0n)),
+    nonce: String(pick(raw, "nonce", 4, "")),
+    status: Number(pick(raw, "status", 5, 0)),
+    createdAt: asBigInt(pick(raw, "createdAt", 6, 0n)),
+    expiresAt: asBigInt(pick(raw, "expiresAt", 7, 0n)),
+    presentationId: String(pick(raw, "presentationId", 8, "")),
+    fulfilled: Boolean(pick(raw, "fulfilled", 9, false)),
   };
 }
 
