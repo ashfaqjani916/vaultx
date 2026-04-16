@@ -219,9 +219,6 @@ contract SSI {
     // Track all approver addresses for governance to query
     address[] public approverAddresses;
 
-    // Track all user addresses for governance to query
-    address[] public allUserAddresses;
-
     // Track all claim IDs for governance to query
     string[] public allClaimIds;
 
@@ -264,9 +261,6 @@ contract SSI {
         });
 
         userAddressToDId[msg.sender] = did;
-
-        // Track all user addresses for governance queries
-        allUserAddresses.push(msg.sender);
 
         // Track approver addresses for governance queries
         if (role == Role.APPROVER) {
@@ -864,10 +858,6 @@ contract SSI {
 
     function getApproverAddresses() public view returns (address[] memory) {
         return approverAddresses;
-    }
-
-    function getAllUserAddresses() public view returns (address[] memory) {
-        return allUserAddresses;
     }
 
     function getAllRequestIds() public view returns (string[] memory) {
