@@ -184,6 +184,7 @@ export default function CitizenDashboard() {
   const [isDecodingQrImage, setIsDecodingQrImage] = useState(false)
   const [isCameraOpen, setIsCameraOpen] = useState(false)
   const [isCameraStarting, setIsCameraStarting] = useState(false)
+  const [isCapturingQrFrame, setIsCapturingQrFrame] = useState(false)
   const [cameraError, setCameraError] = useState<string | null>(null)
   const qrFileInputRef = useRef<HTMLInputElement>(null)
   const qrVideoRef = useRef<HTMLVideoElement>(null)
@@ -191,6 +192,7 @@ export default function CitizenDashboard() {
   const qrScanFrameRef = useRef<number | null>(null)
   const qrVideoStreamRef = useRef<MediaStream | null>(null)
   const isScanningFrameRef = useRef(false)
+  const lastCameraScanAtRef = useRef(0)
 
   // Presentation submission state
   const [selectedPresentationCredentials, setSelectedPresentationCredentials] = useState<Set<string>>(new Set())
@@ -518,8 +520,86 @@ export default function CitizenDashboard() {
 
     const imageData = context.getImageData(0, 0, canvas.width, canvas.height)
     const decoded = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' })
-    return decoded?.data ?? null
+    if (decoded?.data) {
+      return decoded.data
+    }
+
+    // High-contrast fallback improves detection when scanning from bright phone screens.
+    const thresholdData = new Uint8ClampedArray(imageData.data.length)
+    let luminanceSum = 0
+    const pixels = imageData.data.length / 4
+
+    for (let i = 0; i < imageData.data.length; i += 4) {
+      const r = imageData.data[i]
+      const g = imageData.data[i + 1]
+      const b = imageData.data[i + 2]
+      luminanceSum += 0.299 * r + 0.587 * g + 0.114 * b
+    }
+
+    const threshold = luminanceSum / Math.max(1, pixels)
+    for (let i = 0; i < imageData.data.length; i += 4) {
+      const r = imageData.data[i]
+      const g = imageData.data[i + 1]
+      const b = imageData.data[i + 2]
+      const a = imageData.data[i + 3]
+      const lum = 0.299 * r + 0.587 * g + 0.114 * b
+      const bw = lum >= threshold ? 255 : 0
+      thresholdData[i] = bw
+      thresholdData[i + 1] = bw
+      thresholdData[i + 2] = bw
+      thresholdData[i + 3] = a
+    }
+
+    const thresholdDecoded = jsQR(thresholdData, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' })
+    return thresholdDecoded?.data ?? null
   }, [])
+
+  const decodeQrFromVideo = useCallback(
+    async (video: HTMLVideoElement, canvas: HTMLCanvasElement): Promise<string | null> => {
+      const width = video.videoWidth
+      const height = video.videoHeight
+      if (!width || !height) return null
+
+      const context = canvas.getContext('2d')
+      if (!context) return null
+
+      const attempts = [
+        { sx: 0, sy: 0, sw: width, sh: height, dw: width, dh: height },
+        {
+          sx: Math.floor(width * 0.1),
+          sy: Math.floor(height * 0.1),
+          sw: Math.floor(width * 0.8),
+          sh: Math.floor(height * 0.8),
+          dw: width,
+          dh: height,
+        },
+        {
+          sx: Math.floor(width * 0.2),
+          sy: Math.floor(height * 0.2),
+          sw: Math.floor(width * 0.6),
+          sh: Math.floor(height * 0.6),
+          dw: width,
+          dh: height,
+        },
+        { sx: 0, sy: 0, sw: width, sh: height, dw: Math.floor(width * 1.5), dh: Math.floor(height * 1.5) },
+      ]
+
+      for (const attempt of attempts) {
+        canvas.width = Math.max(1, attempt.dw)
+        canvas.height = Math.max(1, attempt.dh)
+        context.clearRect(0, 0, canvas.width, canvas.height)
+        context.drawImage(video, attempt.sx, attempt.sy, attempt.sw, attempt.sh, 0, 0, attempt.dw, attempt.dh)
+
+        const decoded = await decodeQrFromCanvas(canvas)
+        if (decoded) {
+          return decoded
+        }
+      }
+
+      return null
+    },
+    [decodeQrFromCanvas],
+  )
 
   const stopQrCamera = useCallback(() => {
     if (qrScanFrameRef.current !== null) {
@@ -538,7 +618,39 @@ export default function CitizenDashboard() {
 
     setIsCameraOpen(false)
     isScanningFrameRef.current = false
+    setIsCapturingQrFrame(false)
   }, [])
+
+  const captureQrFromCamera = useCallback(async () => {
+    const video = qrVideoRef.current
+    const canvas = qrCanvasRef.current
+
+    if (!video || !canvas) {
+      setCameraError('Camera preview is not ready yet. Please try again.')
+      return
+    }
+
+    setCameraError(null)
+    setIsCapturingQrFrame(true)
+    try {
+      const rawValue = await decodeQrFromVideo(video, canvas)
+      if (!rawValue) {
+        setCameraError('No QR detected in captured frame. Hold steady and try Capture & Scan again.')
+        return
+      }
+
+      parseQrInput(rawValue)
+      stopQrCamera()
+      toast({
+        title: 'QR scanned',
+        description: 'QR payload captured from camera snapshot successfully.',
+      })
+    } catch (error) {
+      setCameraError(error instanceof Error ? error.message : 'Failed to capture and decode camera frame.')
+    } finally {
+      setIsCapturingQrFrame(false)
+    }
+  }, [decodeQrFromVideo, parseQrInput, stopQrCamera])
 
   const scanCameraFrame = useCallback(async () => {
     const video = qrVideoRef.current
@@ -552,24 +664,15 @@ export default function CitizenDashboard() {
       void scanCameraFrame()
     })
 
-    if (isScanningFrameRef.current || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+    const now = Date.now()
+    if (isScanningFrameRef.current || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA || now - lastCameraScanAtRef.current < 120) {
       return
     }
 
+    lastCameraScanAtRef.current = now
     isScanningFrameRef.current = true
     try {
-      const width = video.videoWidth
-      const height = video.videoHeight
-      if (!width || !height) return
-
-      canvas.width = width
-      canvas.height = height
-
-      const context = canvas.getContext('2d')
-      if (!context) return
-
-      context.drawImage(video, 0, 0, width, height)
-      const rawValue = await decodeQrFromCanvas(canvas)
+      const rawValue = await decodeQrFromVideo(video, canvas)
       if (!rawValue) return
 
       parseQrInput(rawValue)
@@ -583,7 +686,7 @@ export default function CitizenDashboard() {
     } finally {
       isScanningFrameRef.current = false
     }
-  }, [decodeQrFromCanvas, isCameraOpen, parseQrInput, stopQrCamera])
+  }, [decodeQrFromVideo, isCameraOpen, parseQrInput, stopQrCamera])
 
   const startQrCamera = useCallback(async () => {
     if (!navigator.mediaDevices?.getUserMedia) {
@@ -979,8 +1082,23 @@ export default function CitizenDashboard() {
                   {(isCameraOpen || isCameraStarting) && (
                     <div className="rounded-lg border border-border bg-background p-3 space-y-2">
                       <video ref={qrVideoRef} autoPlay playsInline muted className="w-full rounded-md border border-border bg-black/80 max-h-64 object-cover" />
+                      <div className="flex gap-2">
+                        <Button type="button" variant="outline" onClick={() => void captureQrFromCamera()} disabled={isCameraStarting || isCapturingQrFrame} className="flex-1">
+                          {isCapturingQrFrame ? (
+                            <>
+                              <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+                              Capturing...
+                            </>
+                          ) : (
+                            <>
+                              <QrCode className="h-4 w-4 mr-1.5" />
+                              Capture & Scan QR
+                            </>
+                          )}
+                        </Button>
+                      </div>
                       <p className="text-xs text-muted-foreground">
-                        {isCameraStarting ? 'Initializing camera preview...' : 'Point the camera at the verifier QR code. It will auto-scan once detected.'}
+                        {isCameraStarting ? 'Initializing camera preview...' : 'Point the camera at the verifier QR code. Auto-scan will try continuously, or use Capture & Scan for a manual scan.'}
                       </p>
                     </div>
                   )}
