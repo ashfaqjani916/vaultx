@@ -7,7 +7,7 @@ import {
 import type { LoginPayload } from "thirdweb/auth";
 import type { SiweAuthOptions } from "thirdweb/react";
 import { createWallet, inAppWallet } from "thirdweb/wallets";
-import ssiArtifact from "../../../contract/artifacts/contracts/SSI.sol/SSI.json";
+import { ssiAbi } from "@/lib/ssiAbi";
 import type { Abi } from "viem";
 
 const thirdwebClientId =
@@ -67,7 +67,7 @@ export const ssiContract = getContract({
   client: thirdwebClient,
   chain: ssiChain,
   address: ssiContractAddress,
-  abi: ssiArtifact.abi as Abi,
+  abi: ssiAbi as Abi,
 });
 
 const parsedLoginMethods = thirdwebLoginMethods

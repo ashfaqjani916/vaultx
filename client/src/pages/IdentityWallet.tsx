@@ -96,7 +96,10 @@ export default function IdentityWallet() {
 
     try {
       await writeByName("registerUser", [
-        userPayload,
+        userPayload.did,
+        userPayload.signingPublicKey,
+        userPayload.encryptionPublicKey,
+        userPayload.role,
       ]);
 
       await refetch();

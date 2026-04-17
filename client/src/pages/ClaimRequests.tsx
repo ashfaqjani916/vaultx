@@ -58,21 +58,14 @@ export default function ClaimRequests() {
       const docHash = await hashString(docName || `doc-${requestId}`);
 
       await writeByName("createClaimRequest", [
-        {
-          requestId,
-          claimId: selectedClaimId,
-          citizenDid: did,
-          documentHash: docHash,
-          photoHash: "",
-          geolocationHash: "",
-          biometricHash: "",
-          status: 0,
-          approverDids: [],
-          finalApproverDid: "",
-          createdAt: now,
-          updatedAt: now,
-          expiresAt: now + BigInt(30 * 24 * 60 * 60), // 30 days
-        },
+        requestId,
+        selectedClaimId,
+        did,
+        docHash,
+        "",
+        "",
+        "",
+        now + BigInt(30 * 24 * 60 * 60),
       ]);
 
       addRequestId(requestId);

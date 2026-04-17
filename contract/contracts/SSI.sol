@@ -166,6 +166,7 @@ contract SSI {
         VerificationStatus status;
         uint256 createdAt;
         uint256 expiresAt;
+        string presentationId;
         bool fulfilled;
     }
 
@@ -218,9 +219,6 @@ contract SSI {
     // Track all approver addresses for governance to query
     address[] public approverAddresses;
 
-    // Track all user addresses for governance to query
-    address[] public allUserAddresses;
-
     // Track all claim IDs for governance to query
     string[] public allClaimIds;
 
@@ -263,9 +261,6 @@ contract SSI {
         });
 
         userAddressToDId[msg.sender] = did;
-
-        // Track all user addresses for governance queries
-        allUserAddresses.push(msg.sender);
 
         // Track approver addresses for governance queries
         if (role == Role.APPROVER) {
@@ -360,17 +355,21 @@ contract SSI {
     }
 
     function getPresentationHash(
+        string memory presentationId,
         string memory verificationRequestId,
         string[] memory credentialIds,
         string memory citizenDid,
+        string memory verifierDid,
         string memory nonce
     ) public view returns (bytes32) {
         return
             keccak256(
                 abi.encode(
+                    presentationId,
                     verificationRequestId,
                     credentialIds,
                     citizenDid,
+                    verifierDid,
                     nonce,
                     address(this),
                     block.chainid
@@ -686,6 +685,21 @@ contract SSI {
     function createVerificationRequest(
         VerificationRequest memory request
     ) public {
+        string memory senderDid = userAddressToDId[msg.sender];
+        User memory user = users[senderDid];
+
+        require(bytes(request.verificationRequestId).length != 0);
+        require(bytes(senderDid).length != 0);
+        require(user.role == Role.VERIFIER);
+        require(user.active);
+        require(bytes(request.nonce).length != 0);
+        require(request.requestedClaims.length > 0);
+        require(request.expiresAt > block.timestamp);
+
+        request.verifierDid = senderDid;
+        request.status = VerificationStatus.REQUESTED;
+        request.fulfilled = false;
+        request.presentationId = "";
         verificationRequests[request.verificationRequestId] = request;
     }
 
@@ -695,35 +709,43 @@ contract SSI {
         return verificationRequests[requestId];
     }
 
-    // function submitPresentation(
-    //     VerifiablePresentation memory presentation
-    // ) public {
-    //     presentations[presentation.presentationId] = presentation;
-    // }
-
     function submitPresentation(
         VerifiablePresentation memory presentation
     ) public {
+        string memory senderDid = userAddressToDId[msg.sender];
+        User memory user = users[senderDid];
+        VerificationRequest storage req = verificationRequests[
+            presentation.verificationRequestId
+        ];
+
+        require(bytes(senderDid).length != 0);
+        require(user.role == Role.CITIZEN);
+        require(user.active);
+        require(bytes(req.verificationRequestId).length != 0);
+        require(bytes(req.presentationId).length == 0);
+        require(
+            keccak256(bytes(senderDid)) ==
+                keccak256(bytes(presentation.citizenDid))
+        );
+        require(
+            keccak256(bytes(req.verifierDid)) ==
+                keccak256(bytes(presentation.verifierDid))
+        );
+        require(block.timestamp <= req.expiresAt);
+
         require(
             bytes(presentations[presentation.presentationId].presentationId)
-                .length == 0,
-            "Exists"
+                .length == 0
         );
 
         presentations[presentation.presentationId] = presentation;
+
+        if (bytes(req.citizenDid).length == 0) {
+            req.citizenDid = presentation.citizenDid;
+        }
+
+        req.presentationId = presentation.presentationId;
     }
-
-    // function verifyPresentation(
-    //     string memory presentationId
-    // ) public view returns (bool) {
-    //     VerifiablePresentation memory p = presentations[presentationId];
-
-    //     if (p.expiresAt < block.timestamp) {
-    //         return false;
-    //     }
-
-    //     return true;
-    // }
 
     function verifyPresentation(
         string memory presentationId
@@ -733,69 +755,100 @@ contract SSI {
             p.verificationRequestId
         ];
 
-        require(bytes(p.presentationId).length != 0, "Invalid presentation");
-        require(bytes(vr.verificationRequestId).length != 0, "Invalid request");
+        require(bytes(p.presentationId).length != 0);
+        require(bytes(vr.verificationRequestId).length != 0);
+        require(bytes(vr.presentationId).length != 0);
+
+        string memory verifierDid = userAddressToDId[msg.sender];
+        User memory verifier = users[verifierDid];
+        require(bytes(verifier.did).length != 0);
+        require(verifier.role == Role.VERIFIER);
+        require(verifier.active);
+        require(
+            keccak256(bytes(verifierDid)) == keccak256(bytes(vr.verifierDid))
+        );
 
         if (block.timestamp > p.expiresAt || block.timestamp > vr.expiresAt) {
+            vr.status = VerificationStatus.REJECTED;
             return false;
         }
 
-        require(!vr.fulfilled, "Already fulfilled");
+        require(!vr.fulfilled);
 
         require(
-            keccak256(bytes(p.citizenDid)) == keccak256(bytes(vr.citizenDid)),
-            "Citizen mismatch"
+            keccak256(bytes(p.presentationId)) ==
+                keccak256(bytes(vr.presentationId))
+        );
+
+        if (bytes(vr.citizenDid).length == 0) {
+            vr.citizenDid = p.citizenDid;
+        }
+
+        require(bytes(vr.citizenDid).length != 0);
+
+        require(
+            keccak256(bytes(p.citizenDid)) == keccak256(bytes(vr.citizenDid))
         );
 
         require(
-            keccak256(bytes(p.nonce)) == keccak256(bytes(vr.nonce)),
-            "Nonce mismatch"
+            keccak256(bytes(p.verifierDid)) == keccak256(bytes(vr.verifierDid))
         );
+
+        require(keccak256(bytes(p.nonce)) == keccak256(bytes(vr.nonce)));
 
         bytes32 hash = getPresentationHash(
+            p.presentationId,
             p.verificationRequestId,
             p.credentialIds,
             p.citizenDid,
+            p.verifierDid,
             p.nonce
         );
 
         address signer = recoverSigner(hash, p.citizenSignature);
         string memory signerDid = userAddressToDId[signer];
+        User memory signerUser = users[signerDid];
 
-        require(
-            keccak256(bytes(signerDid)) == keccak256(bytes(p.citizenDid)),
-            "Invalid signer"
-        );
+        require(bytes(signerDid).length != 0);
+        require(signerUser.active);
+        require(signerUser.role == Role.CITIZEN);
+
+        require(keccak256(bytes(signerDid)) == keccak256(bytes(p.citizenDid)));
+
+        require(p.credentialIds.length > 0);
 
         for (uint i = 0; i < p.credentialIds.length; i++) {
             Credential memory cred = credentials[p.credentialIds[i]];
+            ClaimRequest storage claimRequest = claimRequests[cred.requestId];
 
-            require(bytes(cred.credentialId).length != 0, "Invalid credential");
-            require(
-                cred.status == CredentialStatus.ACTIVE,
-                "Credential invalid"
-            );
+            require(bytes(cred.credentialId).length != 0);
+            require(cred.status == CredentialStatus.ACTIVE);
 
             require(
                 keccak256(bytes(cred.citizenDid)) ==
-                    keccak256(bytes(p.citizenDid)),
-                "Ownership mismatch"
+                    keccak256(bytes(p.citizenDid))
             );
 
-            bool matchFound = false;
+            require(cred.signatures.length > 0);
+
+            require(bytes(claimRequest.requestId).length != 0);
+
+            bool requestedClaimFound = false;
             for (uint j = 0; j < vr.requestedClaims.length; j++) {
                 if (
                     keccak256(bytes(cred.claimId)) ==
                     keccak256(bytes(vr.requestedClaims[j]))
                 ) {
-                    matchFound = true;
+                    requestedClaimFound = true;
                     break;
                 }
             }
-            require(matchFound, "Claim not requested");
+
+            require(requestedClaimFound);
         }
 
         vr.fulfilled = true;
+        vr.status = VerificationStatus.APPROVED;
         p.verified = true;
 
         return true;
@@ -805,10 +858,6 @@ contract SSI {
 
     function getApproverAddresses() public view returns (address[] memory) {
         return approverAddresses;
-    }
-
-    function getAllUserAddresses() public view returns (address[] memory) {
-        return allUserAddresses;
     }
 
     function getAllRequestIds() public view returns (string[] memory) {
