@@ -7,20 +7,20 @@ import { BrowserRouter, Routes, Route, useNavigate } from 'react-router-dom'
 import { ThirdwebProvider, useActiveAccount } from 'thirdweb/react'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { ThirdwebWalletSync } from '@/components/ThirdwebWalletSync'
-import { RoleGuard } from '@/components/auth/RoleGuard'
+// import { RoleGuard } from '@/components/auth/RoleGuard'
 import Login from './pages/Login'
 import Governance from './pages/Governance'
 import CitizenDashboard from './pages/CitizenDashboard'
 import ApproverDashboard from './pages/ApproverDashboard'
 import VerifyerDashboard from './pages/VerifyerDashboard'
-import Dashboard from './pages/Dashboard'
-import ClaimRegistry from './pages/ClaimRegistry'
-import ClaimRequests from './pages/ClaimRequests'
-import Verification from './pages/Verification'
-import Credentials from './pages/Credentials'
-import VerificationRequests from './pages/VerificationRequests'
-import AuditLogs from './pages/AuditLogs'
-import SettingsPage from './pages/Settings'
+// import Dashboard from './pages/Dashboard'
+// import ClaimRegistry from './pages/ClaimRegistry'
+// import ClaimRequests from './pages/ClaimRequests'
+// import Verification from './pages/Verification'
+// import Credentials from './pages/Credentials'
+// import VerificationRequests from './pages/VerificationRequests'
+// import AuditLogs from './pages/AuditLogs'
+// import SettingsPage from './pages/Settings'
 import NotFound from './pages/NotFound'
 import RegisterUser from './pages/RegisterUser'
 
@@ -67,15 +67,15 @@ const App = () => (
             <Route path="/dashboard/approver" element={<ApproverDashboard />} />
             <Route path="/dashboard/verifier" element={<VerifyerDashboard />} />
             <Route element={<AppLayout />}>
-              <Route
+              {/* <Route
                 path="/dashboard"
                 element={
                   <RoleGuard>
                     <Dashboard />
                   </RoleGuard>
                 }
-              />
-              <Route
+              /> */}
+              {/* <Route
                 path="/claims"
                 element={
                   <RoleGuard allowedRoles={['governance']}>
@@ -130,7 +130,7 @@ const App = () => (
                     <SettingsPage />
                   </RoleGuard>
                 }
-              />
+              /> */}
             </Route>
             <Route path="*" element={<NotFound />} />
           </Routes>
