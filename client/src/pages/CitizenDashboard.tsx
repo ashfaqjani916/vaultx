@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useMemo } from 'react'
+import { useState, useRef, useCallback, useMemo, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
@@ -40,7 +40,7 @@ import { useOnchainUser } from '@/hooks/useOnchainUser'
 import { useOnchainClaimDefinitions } from '@/hooks/useOnchainClaimDefinitions'
 import { useOnchainClaimRequests } from '@/hooks/useOnchainClaimRequests'
 import { useOnchainCredentials } from '@/hooks/useOnchainCredentials'
-import { claimRequestStatusLabel, claimStatusLabel, credentialStatusLabel, parseSsiClaim } from '@/lib/ssiParsers'
+import { claimRequestStatusLabel, claimStatusLabel, credentialStatusLabel, parseSsiClaim, parseSsiVerificationRequest } from '@/lib/ssiParsers'
 import { uploadJsonToIPFS, uploadToIPFS } from '@/lib/ipfs'
 import { isSsiContractConfigured, ssiChain, ssiContractAddress, thirdwebClient } from '@/lib/thirdweb'
 import { useQueries } from '@tanstack/react-query'
@@ -49,6 +49,7 @@ import { useActiveAccount, useActiveWallet, useDisconnect, useReadContract, useS
 import { parseVerificationQrPayload, type VerificationQrPayload } from '@/lib/verificationQr'
 import { useSSIWrite } from '@/hooks/useSSIContract'
 import { ClaimRow } from './Governance'
+import jsQR from 'jsqr'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function formatBytes(bytes: number): string {
@@ -181,7 +182,15 @@ export default function CitizenDashboard() {
   const [decodedQrPayload, setDecodedQrPayload] = useState<VerificationQrPayload | null>(null)
   const [qrScanError, setQrScanError] = useState<string | null>(null)
   const [isDecodingQrImage, setIsDecodingQrImage] = useState(false)
+  const [isCameraOpen, setIsCameraOpen] = useState(false)
+  const [isCameraStarting, setIsCameraStarting] = useState(false)
+  const [cameraError, setCameraError] = useState<string | null>(null)
   const qrFileInputRef = useRef<HTMLInputElement>(null)
+  const qrVideoRef = useRef<HTMLVideoElement>(null)
+  const qrCanvasRef = useRef<HTMLCanvasElement>(null)
+  const qrScanFrameRef = useRef<number | null>(null)
+  const qrVideoStreamRef = useRef<MediaStream | null>(null)
+  const isScanningFrameRef = useRef(false)
 
   // Presentation submission state
   const [selectedPresentationCredentials, setSelectedPresentationCredentials] = useState<Set<string>>(new Set())
@@ -202,6 +211,37 @@ export default function CitizenDashboard() {
     })
   }, [decodedQrPayload, availableDefs, activeCredentialClaimIds])
 
+  const { data: rawQrRequestData, isPending: isQrRequestPending } = useReadContract({
+    contract,
+    method:
+      'function getVerificationRequest(string requestId) view returns ((string verificationRequestId, string verifierDid, string citizenDid, string[] requestedClaims, string nonce, uint8 status, uint256 createdAt, uint256 expiresAt, string presentationId, bool fulfilled))',
+    params: [decodedQrPayload?.verificationRequestId ?? ''],
+    queryOptions: { enabled: Boolean(decodedQrPayload?.verificationRequestId) },
+  })
+
+  const decodedQrRequest = useMemo(() => {
+    if (!rawQrRequestData) return null
+    return parseSsiVerificationRequest(rawQrRequestData)
+  }, [rawQrRequestData])
+
+  const qrRequestBlockingMessage = useMemo(() => {
+    if (!decodedQrPayload) return null
+    if (isQrRequestPending) return null
+    if (!decodedQrRequest || !decodedQrRequest.verificationRequestId) {
+      return 'This verification request was not found on-chain. This QR cannot be used.'
+    }
+    if (decodedQrRequest.fulfilled) {
+      return 'This verification request is already fulfilled. This QR cannot be used again.'
+    }
+    if (decodedQrRequest.status === 1) {
+      return 'This verification request is already approved. This QR cannot be used again.'
+    }
+    if (Number(decodedQrRequest.expiresAt) > 0 && Number(decodedQrRequest.expiresAt) < Math.floor(Date.now() / 1000)) {
+      return 'This verification request has expired. Please ask the verifier to generate a new QR.'
+    }
+    return null
+  }, [decodedQrPayload, decodedQrRequest, isQrRequestPending])
+
   // ── Presentation submission handler ──────────────────────────────────────
   const handleSignAndSubmitPresentation = useCallback(async () => {
     setPresentationError(null)
@@ -209,6 +249,11 @@ export default function CitizenDashboard() {
 
     if (!decodedQrPayload || !did) {
       setPresentationError('QR payload or citizen DID is missing.')
+      return
+    }
+
+    if (qrRequestBlockingMessage) {
+      setPresentationError(qrRequestBlockingMessage)
       return
     }
 
@@ -294,7 +339,7 @@ export default function CitizenDashboard() {
     } finally {
       setIsSigningAndSubmitting(false)
     }
-  }, [decodedQrPayload, did, selectedPresentationCredentials, activeWallet, writeByName, account])
+  }, [decodedQrPayload, did, selectedPresentationCredentials, activeWallet, writeByName, account, qrRequestBlockingMessage])
 
   const togglePresentationCredential = (credentialId: string) => {
     setSelectedPresentationCredentials((current) => {
@@ -399,12 +444,204 @@ export default function CitizenDashboard() {
     }
   }
 
-  const parseQrInput = useCallback((rawValue: string) => {
-    const { payload, error } = parseVerificationQrPayload(rawValue)
-    setQrPayloadInput(rawValue)
-    setDecodedQrPayload(payload)
-    setQrScanError(error)
+  const tryParseQrPayload = useCallback((rawValue: string) => {
+    const trimmed = rawValue.trim()
+    const candidates = [trimmed]
+
+    try {
+      const decoded = decodeURIComponent(trimmed)
+      if (decoded && decoded !== trimmed) {
+        candidates.push(decoded)
+      }
+    } catch {
+      // ignore malformed URI encoding
+    }
+
+    const payloadMatch = trimmed.match(/[?&]payload=([^&]+)/)
+    if (payloadMatch?.[1]) {
+      try {
+        const extracted = decodeURIComponent(payloadMatch[1])
+        if (extracted) {
+          candidates.push(extracted)
+        }
+      } catch {
+        candidates.push(payloadMatch[1])
+      }
+    }
+
+    let bestError: string | null = null
+    for (const candidate of candidates) {
+      const result = parseVerificationQrPayload(candidate)
+      if (result.payload) {
+        return { normalized: candidate, payload: result.payload, error: null }
+      }
+      if (!bestError && result.error) {
+        bestError = result.error
+      }
+    }
+
+    return { normalized: trimmed, payload: null, error: bestError ?? 'Invalid QR payload.' }
   }, [])
+
+  const parseQrInput = useCallback(
+    (rawValue: string) => {
+      const { normalized, payload, error } = tryParseQrPayload(rawValue)
+      setQrPayloadInput(normalized)
+      setDecodedQrPayload(payload)
+      setQrScanError(error)
+      if (payload) {
+        setCameraError(null)
+      }
+    },
+    [tryParseQrPayload],
+  )
+
+  const decodeQrFromCanvas = useCallback(async (canvas: HTMLCanvasElement): Promise<string | null> => {
+    const detectorWindow = window as typeof window & {
+      BarcodeDetector?: BarcodeDetectorConstructor
+    }
+
+    if (detectorWindow.BarcodeDetector) {
+      try {
+        const detector = new detectorWindow.BarcodeDetector({ formats: ['qr_code'] })
+        const [result] = await detector.detect(canvas)
+        if (result?.rawValue) {
+          return result.rawValue
+        }
+      } catch {
+        // fall through to jsQR fallback
+      }
+    }
+
+    const context = canvas.getContext('2d', { willReadFrequently: true })
+    if (!context) return null
+
+    const imageData = context.getImageData(0, 0, canvas.width, canvas.height)
+    const decoded = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' })
+    return decoded?.data ?? null
+  }, [])
+
+  const stopQrCamera = useCallback(() => {
+    if (qrScanFrameRef.current !== null) {
+      window.cancelAnimationFrame(qrScanFrameRef.current)
+      qrScanFrameRef.current = null
+    }
+
+    if (qrVideoStreamRef.current) {
+      qrVideoStreamRef.current.getTracks().forEach((track) => track.stop())
+      qrVideoStreamRef.current = null
+    }
+
+    if (qrVideoRef.current) {
+      qrVideoRef.current.srcObject = null
+    }
+
+    setIsCameraOpen(false)
+    isScanningFrameRef.current = false
+  }, [])
+
+  const scanCameraFrame = useCallback(async () => {
+    const video = qrVideoRef.current
+    const canvas = qrCanvasRef.current
+
+    if (!video || !canvas || !isCameraOpen) {
+      return
+    }
+
+    qrScanFrameRef.current = window.requestAnimationFrame(() => {
+      void scanCameraFrame()
+    })
+
+    if (isScanningFrameRef.current || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
+      return
+    }
+
+    isScanningFrameRef.current = true
+    try {
+      const width = video.videoWidth
+      const height = video.videoHeight
+      if (!width || !height) return
+
+      canvas.width = width
+      canvas.height = height
+
+      const context = canvas.getContext('2d')
+      if (!context) return
+
+      context.drawImage(video, 0, 0, width, height)
+      const rawValue = await decodeQrFromCanvas(canvas)
+      if (!rawValue) return
+
+      parseQrInput(rawValue)
+      stopQrCamera()
+      toast({
+        title: 'QR scanned',
+        description: 'QR payload captured from camera successfully.',
+      })
+    } catch (error) {
+      setCameraError(error instanceof Error ? error.message : 'Camera scanning failed.')
+    } finally {
+      isScanningFrameRef.current = false
+    }
+  }, [decodeQrFromCanvas, isCameraOpen, parseQrInput, stopQrCamera])
+
+  const startQrCamera = useCallback(async () => {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCameraError('Camera access is not supported in this browser.')
+      return
+    }
+
+    setCameraError(null)
+    setIsCameraStarting(true)
+    setIsCameraOpen(true)
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: 'environment' },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+      })
+
+      await new Promise((resolve) => window.requestAnimationFrame(() => resolve(undefined)))
+
+      const video = qrVideoRef.current
+      if (!video) {
+        stream.getTracks().forEach((track) => track.stop())
+        throw new Error('Camera preview could not be initialized.')
+      }
+
+      qrVideoStreamRef.current = stream
+      video.srcObject = stream
+
+      await new Promise<void>((resolve) => {
+        if (video.readyState >= HTMLMediaElement.HAVE_METADATA) {
+          resolve()
+          return
+        }
+
+        const onLoadedMetadata = () => {
+          video.removeEventListener('loadedmetadata', onLoadedMetadata)
+          resolve()
+        }
+        video.addEventListener('loadedmetadata', onLoadedMetadata)
+      })
+
+      await video.play()
+      qrScanFrameRef.current = window.requestAnimationFrame(() => {
+        void scanCameraFrame()
+      })
+    } catch (error) {
+      if (error instanceof Error && error.name === 'NotAllowedError') {
+        setCameraError('Camera permission was denied. Please allow camera access and try again.')
+      } else {
+        setCameraError(error instanceof Error ? error.message : 'Unable to start camera scanner.')
+      }
+      stopQrCamera()
+    } finally {
+      setIsCameraStarting(false)
+    }
+  }, [scanCameraFrame, stopQrCamera])
 
   const handleDecodeQrImage = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -412,32 +649,51 @@ export default function CitizenDashboard() {
 
     if (!file) return
 
-    const detectorWindow = window as typeof window & {
-      BarcodeDetector?: BarcodeDetectorConstructor
-    }
-
-    if (!detectorWindow.BarcodeDetector) {
-      setQrScanError('QR image decoding is not supported in this browser. Paste the scanned payload JSON instead.')
-      return
-    }
-
     setIsDecodingQrImage(true)
     setQrScanError(null)
 
     let bitmap: ImageBitmap | null = null
 
     try {
-      bitmap = await createImageBitmap(file)
-      const detector = new detectorWindow.BarcodeDetector({ formats: ['qr_code'] })
-      const [result] = await detector.detect(bitmap)
+      try {
+        bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' })
+      } catch {
+        bitmap = await createImageBitmap(file)
+      }
 
-      if (!result?.rawValue) {
+      const canvas = qrCanvasRef.current ?? document.createElement('canvas')
+      const context = canvas.getContext('2d')
+      if (!context) {
+        throw new Error('Canvas context unavailable for QR decoding.')
+      }
+
+      const scales = [1, 1.5, 2]
+      let rawValue: string | null = null
+
+      for (const scale of scales) {
+        const width = Math.max(1, Math.floor(bitmap.width * scale))
+        const height = Math.max(1, Math.floor(bitmap.height * scale))
+
+        canvas.width = width
+        canvas.height = height
+        context.clearRect(0, 0, width, height)
+        context.drawImage(bitmap, 0, 0, width, height)
+
+        rawValue = await decodeQrFromCanvas(canvas)
+        if (rawValue) break
+      }
+
+      if (!rawValue) {
         setDecodedQrPayload(null)
         setQrScanError('No QR code was detected in that image. Try a clearer screenshot or paste the payload.')
         return
       }
 
-      parseQrInput(result.rawValue)
+      parseQrInput(rawValue)
+      toast({
+        title: 'QR decoded',
+        description: 'QR payload extracted from image successfully.',
+      })
     } catch (error) {
       setDecodedQrPayload(null)
       setQrScanError(error instanceof Error ? error.message : 'Failed to decode the QR image.')
@@ -446,6 +702,12 @@ export default function CitizenDashboard() {
       setIsDecodingQrImage(false)
     }
   }
+
+  useEffect(() => {
+    return () => {
+      stopQrCamera()
+    }
+  }, [stopQrCamera])
 
   const closeModal = () => {
     if (isUploading) return
@@ -692,7 +954,43 @@ export default function CitizenDashboard() {
                       <QrCode className="h-4 w-4 mr-1.5" />
                       Read Request
                     </Button>
+                    {isCameraOpen ? (
+                      <Button type="button" variant="outline" onClick={stopQrCamera}>
+                        <X className="h-4 w-4 mr-1.5" />
+                        Stop Camera
+                      </Button>
+                    ) : (
+                      <Button type="button" variant="outline" onClick={() => void startQrCamera()} disabled={isCameraStarting}>
+                        {isCameraStarting ? (
+                          <>
+                            <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+                            Starting Camera...
+                          </>
+                        ) : (
+                          <>
+                            <ScanLine className="h-4 w-4 mr-1.5" />
+                            Scan with Camera
+                          </>
+                        )}
+                      </Button>
+                    )}
                   </div>
+
+                  {(isCameraOpen || isCameraStarting) && (
+                    <div className="rounded-lg border border-border bg-background p-3 space-y-2">
+                      <video ref={qrVideoRef} autoPlay playsInline muted className="w-full rounded-md border border-border bg-black/80 max-h-64 object-cover" />
+                      <p className="text-xs text-muted-foreground">
+                        {isCameraStarting ? 'Initializing camera preview...' : 'Point the camera at the verifier QR code. It will auto-scan once detected.'}
+                      </p>
+                    </div>
+                  )}
+
+                  {cameraError && (
+                    <div className="flex items-start gap-2 text-xs text-destructive bg-destructive/10 border border-destructive/20 rounded-md px-3 py-2.5">
+                      <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                      <span>{cameraError}</span>
+                    </div>
+                  )}
 
                   {qrScanError && (
                     <div className="flex items-start gap-2 text-xs text-destructive bg-destructive/10 border border-destructive/20 rounded-md px-3 py-2.5">
@@ -702,6 +1000,8 @@ export default function CitizenDashboard() {
                   )}
                 </div>
 
+                <canvas ref={qrCanvasRef} className="hidden" />
+
                 <div className="rounded-xl border border-border bg-muted/20 p-4 space-y-4">
                   <div>
                     <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Decoded Request</p>
@@ -710,6 +1010,18 @@ export default function CitizenDashboard() {
 
                   {decodedQrPayload ? (
                     <div className="space-y-4">
+                      {isQrRequestPending ? (
+                        <div className="flex items-start gap-2 text-xs text-muted-foreground bg-muted/40 border border-border rounded-md px-3 py-2.5">
+                          <Loader2 className="h-3.5 w-3.5 mt-0.5 shrink-0 animate-spin" />
+                          <span>Validating request state on-chain...</span>
+                        </div>
+                      ) : qrRequestBlockingMessage ? (
+                        <div className="flex items-start gap-2 text-xs text-destructive bg-destructive/10 border border-destructive/20 rounded-md px-3 py-2.5">
+                          <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                          <span>{qrRequestBlockingMessage}</span>
+                        </div>
+                      ) : null}
+
                       <div className="grid gap-3 sm:grid-cols-2">
                         <div>
                           <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Verifier DID</p>
@@ -811,7 +1123,7 @@ export default function CitizenDashboard() {
 
                   <Button
                     onClick={handleSignAndSubmitPresentation}
-                    disabled={isSigningAndSubmitting || selectedPresentationCredentials.size === 0 || !did}
+                    disabled={isSigningAndSubmitting || selectedPresentationCredentials.size === 0 || !did || Boolean(qrRequestBlockingMessage) || isQrRequestPending}
                     className="gradient-primary text-primary-foreground w-full"
                   >
                     {isSigningAndSubmitting ? (
