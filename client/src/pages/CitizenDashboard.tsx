@@ -1,8 +1,30 @@
-
 import { useState, useRef, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Hexagon, Upload, FileText, FileImage, File, X, CheckCircle2, Clock, Shield, Plus, Eye, Fingerprint, AlertCircle, FolderOpen, Loader2, Hash, Award, LogOut, QrCode, ScanLine } from 'lucide-react'
+import {
+  Hexagon,
+  Upload,
+  FileText,
+  FileImage,
+  File,
+  X,
+  CheckCircle2,
+  Clock,
+  Shield,
+  Plus,
+  Eye,
+  Fingerprint,
+  AlertCircle,
+  FolderOpen,
+  Loader2,
+  Hash,
+  Award,
+  LogOut,
+  QrCode,
+  ScanLine,
+  Send,
+  Signature,
+} from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -23,8 +45,9 @@ import { uploadJsonToIPFS, uploadToIPFS } from '@/lib/ipfs'
 import { isSsiContractConfigured, ssiChain, ssiContractAddress, thirdwebClient } from '@/lib/thirdweb'
 import { useQueries } from '@tanstack/react-query'
 import { getContract, prepareContractCall, readContract } from 'thirdweb'
-import { useActiveWallet, useDisconnect, useReadContract, useSendAndConfirmTransaction } from 'thirdweb/react'
+import { useActiveAccount, useActiveWallet, useDisconnect, useReadContract, useSendAndConfirmTransaction, useContractEvents } from 'thirdweb/react'
 import { parseVerificationQrPayload, type VerificationQrPayload } from '@/lib/verificationQr'
+import { useSSIWrite } from '@/hooks/useSSIContract'
 import { ClaimRow } from './Governance'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -62,9 +85,23 @@ function formatUnixTime(timestamp: number) {
   return new Date(timestamp * 1000).toLocaleString()
 }
 
+function hexToBytes(hex: string): Uint8Array {
+  const normalized = hex.startsWith('0x') ? hex.slice(2) : hex
+  if (normalized.length % 2 !== 0) {
+    throw new Error('Invalid hex string length')
+  }
+
+  const bytes = new Uint8Array(normalized.length / 2)
+  for (let i = 0; i < normalized.length; i += 2) {
+    bytes[i / 2] = Number.parseInt(normalized.slice(i, i + 2), 16)
+  }
+  return bytes
+}
+
 // ── Component ─────────────────────────────────────────────────────────────────
 export default function CitizenDashboard() {
   const navigate = useNavigate()
+  const account = useActiveAccount()
   const activeWallet = useActiveWallet()
   const { disconnect } = useDisconnect()
   const { did, user, isConnected } = useOnchainUser()
@@ -146,6 +183,13 @@ export default function CitizenDashboard() {
   const [isDecodingQrImage, setIsDecodingQrImage] = useState(false)
   const qrFileInputRef = useRef<HTMLInputElement>(null)
 
+  // Presentation submission state
+  const [selectedPresentationCredentials, setSelectedPresentationCredentials] = useState<Set<string>>(new Set())
+  const [isSigningAndSubmitting, setIsSigningAndSubmitting] = useState(false)
+  const [presentationStatus, setPresentationStatus] = useState<string | null>(null)
+  const [presentationError, setPresentationError] = useState<string | null>(null)
+  const { writeByName } = useSSIWrite()
+
   const requestedQrClaims = useMemo(() => {
     if (!decodedQrPayload) return []
     return decodedQrPayload.requestedClaims.map((claimId) => {
@@ -157,6 +201,112 @@ export default function CitizenDashboard() {
       }
     })
   }, [decodedQrPayload, availableDefs, activeCredentialClaimIds])
+
+  // ── Presentation submission handler ──────────────────────────────────────
+  const handleSignAndSubmitPresentation = useCallback(async () => {
+    setPresentationError(null)
+    setPresentationStatus(null)
+
+    if (!decodedQrPayload || !did) {
+      setPresentationError('QR payload or citizen DID is missing.')
+      return
+    }
+
+    if (selectedPresentationCredentials.size === 0) {
+      setPresentationError('Select at least one credential to present.')
+      return
+    }
+
+    if (!activeWallet) {
+      setPresentationError('Wallet not connected. Please connect your wallet to sign.')
+      return
+    }
+
+    setIsSigningAndSubmitting(true)
+
+    try {
+      // Step 1: Generate unique presentationId
+      const presentationId = `pres-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+      const credentialIds = Array.from(selectedPresentationCredentials)
+
+      setPresentationStatus('Getting hash to sign...')
+
+      // Step 2: Call getPresentationHash to get the hash
+      const hashData = await readContract({
+        contract: getContract({
+          client: thirdwebClient,
+          chain: ssiChain,
+          address: ssiContractAddress,
+        }),
+        method: 'function getPresentationHash(string presentationId, string verificationRequestId, string[] credentialIds, string citizenDid, string verifierDid, string nonce) view returns (bytes32)',
+        params: [presentationId, decodedQrPayload.verificationRequestId, credentialIds, did, decodedQrPayload.verifierDid, decodedQrPayload.nonce],
+      })
+
+      const hashHex = hashData as string // This will be a hex string from the contract
+
+      setPresentationStatus('Signing presentation...')
+
+      // Step 3: Sign the hash using the connected wallet
+      // Format the hash as bytes for signing (EIP-191)
+      const hashBytes = hexToBytes(hashHex)
+      if (!account) {
+        throw new Error('Wallet account is not available for signing.')
+      }
+
+      const signature = await account.signMessage({
+        message: { raw: hashBytes },
+      })
+
+      setPresentationStatus('Submitting presentation to chain...')
+
+      // Step 4: Submit presentation to contract
+      await writeByName('submitPresentation', [
+        {
+          presentationId,
+          verificationRequestId: decodedQrPayload.verificationRequestId,
+          citizenDid: did,
+          verifierDid: decodedQrPayload.verifierDid,
+          credentialIds,
+          citizenSignature: signature,
+          nonce: decodedQrPayload.nonce,
+          createdAt: BigInt(Math.floor(Date.now() / 1000)),
+          expiresAt: BigInt(decodedQrPayload.expiresAt),
+          verified: false,
+        },
+      ])
+
+      setPresentationStatus('Presentation submitted successfully! Awaiting verifier approval.')
+      toast({
+        title: 'Presentation Submitted',
+        description: `Your credentials have been submitted for verification. Presentation ID: ${presentationId}`,
+      })
+
+      // Clear selection after submission
+      setSelectedPresentationCredentials(new Set())
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : 'Failed to sign and submit presentation.'
+      setPresentationError(errorMsg)
+      toast({
+        title: 'Submission Failed',
+        description: errorMsg,
+        variant: 'destructive',
+      })
+    } finally {
+      setIsSigningAndSubmitting(false)
+    }
+  }, [decodedQrPayload, did, selectedPresentationCredentials, activeWallet, writeByName, account])
+
+  const togglePresentationCredential = (credentialId: string) => {
+    setSelectedPresentationCredentials((current) => {
+      const next = new Set(current)
+      if (next.has(credentialId)) {
+        next.delete(credentialId)
+      } else {
+        next.add(credentialId)
+      }
+      return next
+    })
+  }
 
   // ── Upload modal state ──────────────────────────────────────────────────
   const [uploadOpen, setUploadOpen] = useState(false)
@@ -424,7 +574,9 @@ export default function CitizenDashboard() {
           <Hexagon className="h-10 w-10 text-primary mx-auto mb-3" />
           <p className="text-sm font-medium mb-2">Wallet not connected</p>
           <p className="text-xs text-muted-foreground mb-4">Connect your wallet to access the citizen dashboard.</p>
-          <Button className="gradient-primary text-primary-foreground" onClick={() => navigate('/', { replace: true })}>Connect Wallet</Button>
+          <Button className="gradient-primary text-primary-foreground" onClick={() => navigate('/', { replace: true })}>
+            Connect Wallet
+          </Button>
         </Card>
       </div>
     )
@@ -510,13 +662,7 @@ export default function CitizenDashboard() {
 
               <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
                 <div className="space-y-3">
-                  <input
-                    ref={qrFileInputRef}
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={handleDecodeQrImage}
-                  />
+                  <input ref={qrFileInputRef} type="file" accept="image/*" className="hidden" onChange={handleDecodeQrImage} />
 
                   <div>
                     <Label className="text-xs">QR Payload</Label>
@@ -559,9 +705,7 @@ export default function CitizenDashboard() {
                 <div className="rounded-xl border border-border bg-muted/20 p-4 space-y-4">
                   <div>
                     <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Decoded Request</p>
-                    <p className="text-sm font-medium text-card-foreground mt-1">
-                      {decodedQrPayload ? decodedQrPayload.verificationRequestId : 'No QR request loaded'}
-                    </p>
+                    <p className="text-sm font-medium text-card-foreground mt-1">{decodedQrPayload ? decodedQrPayload.verificationRequestId : 'No QR request loaded'}</p>
                   </div>
 
                   {decodedQrPayload ? (
@@ -586,9 +730,7 @@ export default function CitizenDashboard() {
                                 <div>
                                   <p className="text-sm font-medium text-card-foreground">{definition?.name || claimId}</p>
                                   <p className="text-[11px] font-mono text-muted-foreground break-all mt-0.5">{claimId}</p>
-                                  {definition?.description && (
-                                    <p className="text-xs text-muted-foreground mt-1">{definition.description}</p>
-                                  )}
+                                  {definition?.description && <p className="text-xs text-muted-foreground mt-1">{definition.description}</p>}
                                 </div>
                                 <StatusBadge status={inWallet ? 'active' : 'pending'} />
                               </div>
@@ -608,6 +750,86 @@ export default function CitizenDashboard() {
               </div>
             </Card>
           </motion.div>
+
+          {/* ── Credential Presentation section ── */}
+          {decodedQrPayload && activeCredentials.length > 0 && (
+            <motion.div {...cardAnim(2)}>
+              <Card className="p-6 shadow-card border-border bg-card">
+                <div className="flex items-start justify-between gap-4 mb-4">
+                  <div>
+                    <h2 className="text-base font-semibold">Present Credentials</h2>
+                    <p className="text-sm text-muted-foreground mt-1">Select which credentials to present to the verifier and sign your submission.</p>
+                  </div>
+                  <Signature className="h-5 w-5 text-primary shrink-0" />
+                </div>
+
+                <div className="space-y-4">
+                  {/* Show credentials that match requested claims */}
+                  <div>
+                    <p className="text-xs font-semibold text-card-foreground mb-3">Available Credentials for Request</p>
+                    <div className="space-y-2">
+                      {requestedQrClaims.map(({ claimId, definition, inWallet }) => {
+                        if (!inWallet) return null
+                        const matchingCredential = activeCredentials.find((c) => c.claimId === claimId)
+                        if (!matchingCredential) return null
+
+                        return (
+                          <label key={matchingCredential.credentialId} className="flex items-start gap-3 p-3 border border-border rounded-lg cursor-pointer hover:bg-muted/30 transition-colors">
+                            <input
+                              type="checkbox"
+                              checked={selectedPresentationCredentials.has(matchingCredential.credentialId)}
+                              onChange={() => togglePresentationCredential(matchingCredential.credentialId)}
+                              className="mt-0.5"
+                            />
+                            <div className="min-w-0 flex-1">
+                              <p className="text-sm font-medium text-card-foreground">{definition?.name || claimId}</p>
+                              <p className="text-xs font-mono text-muted-foreground break-all mt-0.5">{matchingCredential.credentialId}</p>
+                              <p className="text-xs text-muted-foreground mt-1">
+                                Issued {matchingCredential.issuedAt > 0n ? new Date(Number(matchingCredential.issuedAt) * 1000).toLocaleDateString() : '—'}
+                              </p>
+                            </div>
+                            <StatusBadge status="active" />
+                          </label>
+                        )
+                      })}
+                    </div>
+                  </div>
+
+                  {presentationError && (
+                    <div className="flex items-start gap-2 text-xs text-destructive bg-destructive/10 border border-destructive/20 rounded-md px-3 py-2.5">
+                      <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                      <span>{presentationError}</span>
+                    </div>
+                  )}
+
+                  {presentationStatus && (
+                    <div className="flex items-start gap-2 text-xs text-success bg-success/10 border border-success/20 rounded-md px-3 py-2.5">
+                      <CheckCircle2 className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                      <span>{presentationStatus}</span>
+                    </div>
+                  )}
+
+                  <Button
+                    onClick={handleSignAndSubmitPresentation}
+                    disabled={isSigningAndSubmitting || selectedPresentationCredentials.size === 0 || !did}
+                    className="gradient-primary text-primary-foreground w-full"
+                  >
+                    {isSigningAndSubmitting ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
+                        Signing & Submitting...
+                      </>
+                    ) : (
+                      <>
+                        <Send className="h-4 w-4 mr-1.5" />
+                        Sign & Submit Presentation ({selectedPresentationCredentials.size})
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </Card>
+            </motion.div>
+          )}
 
           {/* ── Credentials section ── */}
           {activeCredentials.length > 0 && (
