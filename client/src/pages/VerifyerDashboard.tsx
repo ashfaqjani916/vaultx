@@ -9,11 +9,11 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { StatusBadge } from '@/components/StatusBadge'
-import { useActiveWallet, useDisconnect, useReadContract, useSendTransaction } from 'thirdweb/react'
+import { useQueries } from '@tanstack/react-query'
+import { useActiveWallet, useDisconnect, useReadContract, useSendAndConfirmTransaction } from 'thirdweb/react'
 import { useOnchainUser } from '@/hooks/useOnchainUser'
-import { useOnchainClaimDefinitions } from '@/hooks/useOnchainClaimDefinitions'
 import { buildVerificationQrPayload, type VerificationQrPayload } from '@/lib/verificationQr'
-import { parseSsiVerificationRequest, verificationRequestStatusLabel } from '@/lib/ssiParsers'
+import { parseSsiClaim, parseSsiVerificationRequest, verificationRequestStatusLabel, type SsiClaim } from '@/lib/ssiParsers'
 import { toast } from '@/hooks/use-toast'
 import { getContract, prepareContractCall, readContract } from 'thirdweb'
 import { thirdwebClient, ssiChain, ssiContractAddress } from '@/lib/thirdweb'
@@ -56,8 +56,7 @@ export default function VerifyerDashboard() {
   const activeWallet = useActiveWallet()
   const { disconnect } = useDisconnect()
   const { did } = useOnchainUser()
-  const { definitions, isLoading: claimsLoading } = useOnchainClaimDefinitions()
-  const { mutate: sendTransaction, mutateAsync: sendTransactionAsync, isPending: isTxPending } = useSendTransaction()
+  const { mutateAsync: sendAndConfirmTransactionAsync, isPending: isTxPending } = useSendAndConfirmTransaction()
 
   const contract = useMemo(
     () =>
@@ -74,7 +73,42 @@ export default function VerifyerDashboard() {
     navigate('/', { replace: true })
   }
 
-  const activeClaims = useMemo(() => definitions.filter((definition) => definition.status === 1), [definitions])
+  const { data: rawClaimIds, isPending: isClaimIdsPending } = useReadContract({
+    contract,
+    method: 'function getAllClaimIds() view returns (string[])',
+    params: [],
+  })
+
+  const claimQueries = useQueries({
+    queries: Array.isArray(rawClaimIds)
+      ? rawClaimIds.map((claimId) => ({
+          queryKey: ['verifier-claim', claimId],
+          queryFn: () =>
+            readContract({
+              contract,
+              method:
+                'function getClaim(string claimId) view returns ((string claimId, string claimType, string description, bool documentRequired, bool photoRequired, bool geolocationRequired, bool biometricRequired, uint256 numberOfApprovalsNeeded, uint8 status, uint256 createdAt, uint256 approvedAt, string createdByDid, string approvedByDid))',
+              params: [claimId],
+            }),
+          staleTime: 15_000,
+          retry: 1,
+        }))
+      : [],
+  })
+
+  const definitions = useMemo(() => {
+    return claimQueries
+      .map((query) => {
+        if (!query.data) return null
+        const claim = parseSsiClaim(query.data)
+        if (!claim.claimId) return null
+        return claim
+      })
+      .filter((claim): claim is SsiClaim => Boolean(claim))
+  }, [claimQueries])
+
+  const claimsLoading = isClaimIdsPending || claimQueries.some((query) => query.isPending || query.isFetching)
+
   const claimById = useMemo(() => new Map(definitions.map((claim) => [claim.claimId, claim])), [definitions])
 
   const [selectedClaimIds, setSelectedClaimIds] = useState<string[]>([])
@@ -106,24 +140,27 @@ export default function VerifyerDashboard() {
     queryOptions: { enabled: Boolean(selectedRequestId) },
   })
 
-  const { data: allVerificationRequestIdsData, isPending: isAllVerificationIdsPending } = useReadContract({
-    contract,
-    method: 'function getAllVerificationRequestIds() view returns (string[])',
-    params: [],
-    queryOptions: { enabled: Boolean(did) },
-  })
-
-  const onchainVerificationRequestIds = useMemo(() => {
-    if (!Array.isArray(allVerificationRequestIdsData)) return [] as string[]
-    return (allVerificationRequestIdsData as unknown[]).map(String).filter(Boolean)
-  }, [allVerificationRequestIdsData])
-
   const selectedRequest = useMemo(() => {
     if (!selectedRequestData) return null
     const parsed = parseSsiVerificationRequest(selectedRequestData)
     if (!parsed.verificationRequestId) return null
     return parsed
   }, [selectedRequestData])
+
+  useEffect(() => {
+    if (!selectedRequest) return
+    const requestForQr: VerificationQrPayload = {
+      verificationRequestId: selectedRequest.verificationRequestId,
+      verifierDid: selectedRequest.verifierDid,
+      citizenDid: selectedRequest.citizenDid,
+      requestedClaims: selectedRequest.requestedClaims,
+      nonce: selectedRequest.nonce,
+      createdAt: Number(selectedRequest.createdAt),
+      expiresAt: Number(selectedRequest.expiresAt),
+    }
+    setGeneratedRequest(requestForQr)
+    persistGeneratedRequest(requestForQr)
+  }, [selectedRequest])
 
   useEffect(() => {
     if (!trackedRequestStorageKey) return
@@ -229,7 +266,7 @@ export default function VerifyerDashboard() {
           'function createVerificationRequest((string verificationRequestId, string verifierDid, string citizenDid, string[] requestedClaims, string nonce, uint8 status, uint256 createdAt, uint256 expiresAt, string presentationId, bool fulfilled) request)',
         params: [request],
       })
-      await sendTransactionAsync(transaction)
+      await sendAndConfirmTransactionAsync(transaction)
 
       setGeneratedRequest({
         verificationRequestId: requestId,
@@ -260,7 +297,7 @@ export default function VerifyerDashboard() {
 
       toast({
         title: 'Verification request created',
-        description: `Request ${requestId} is now ready to be scanned by the citizen.`,
+        description: `Request ${requestId} is confirmed on-chain and ready to be scanned by the citizen.`,
       })
     } catch (error) {
       setRequestError(error instanceof Error ? error.message : 'Failed to create verification request.')
@@ -276,7 +313,7 @@ export default function VerifyerDashboard() {
       return
     }
 
-    const sourceRequestIds = onchainVerificationRequestIds.length > 0 ? onchainVerificationRequestIds : trackedRequestIds
+    const sourceRequestIds = trackedRequestIds
 
     if (sourceRequestIds.length === 0) {
       setMyRequests([])
@@ -343,34 +380,32 @@ export default function VerifyerDashboard() {
   useEffect(() => {
     void fetchVerifierRequests()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [did, trackedRequestIds.join('|'), onchainVerificationRequestIds.join('|')])
+  }, [did, trackedRequestIds.join('|')])
 
-  const verifyPresentation = (presentationId: string) => {
+  const verifyPresentation = async (presentationId: string) => {
     setVerifyingPresentationId(presentationId)
-    const transaction = prepareContractCall({
-      contract,
-      method: 'function verifyPresentation(string presentationId) returns (bool)',
-      params: [presentationId],
-    })
+    try {
+      const transaction = prepareContractCall({
+        contract,
+        method: 'function verifyPresentation(string presentationId) returns (bool)',
+        params: [presentationId],
+      })
+      await sendAndConfirmTransactionAsync(transaction)
 
-    sendTransaction(transaction, {
-      onSuccess: () => {
-        toast({
-          title: 'Verification submitted',
-          description: `verifyPresentation(${presentationId}) was submitted successfully.`,
-        })
-        setVerifyingPresentationId(null)
-        void fetchVerifierRequests()
-      },
-      onError: (error) => {
-        toast({
-          title: 'Verification failed',
-          description: error instanceof Error ? error.message : 'Failed to submit verifyPresentation transaction.',
-          variant: 'destructive',
-        })
-        setVerifyingPresentationId(null)
-      },
-    })
+      toast({
+        title: 'Verification confirmed',
+        description: `verifyPresentation(${presentationId}) is confirmed on-chain.`,
+      })
+      await fetchVerifierRequests()
+    } catch (error) {
+      toast({
+        title: 'Verification failed',
+        description: error instanceof Error ? error.message : 'Failed to confirm verifyPresentation transaction.',
+        variant: 'destructive',
+      })
+    } finally {
+      setVerifyingPresentationId(null)
+    }
   }
 
   return (
@@ -425,13 +460,6 @@ export default function VerifyerDashboard() {
                     {pendingPresentations.length} pending • {myRequests.length} my requests
                   </span>
                 </div>
-
-                {isAllVerificationIdsPending && (
-                  <div className="text-xs text-muted-foreground flex items-center gap-2">
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    Loading request index from blockchain...
-                  </div>
-                )}
 
                 {pendingPresentations.length === 0 ? (
                   <div className="rounded-lg border border-dashed border-border bg-muted/20 p-6 text-center">

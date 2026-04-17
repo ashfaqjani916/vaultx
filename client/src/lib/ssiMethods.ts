@@ -62,8 +62,6 @@ export const ssiMethods = {
 
   createVerificationRequest: `function createVerificationRequest(${VERIFICATION_REQUEST_TUPLE} request)`,
   getVerificationRequest: `function getVerificationRequest(string requestId) view returns ${VERIFICATION_REQUEST_TUPLE}`,
-  getAllVerificationRequestIds:
-    "function getAllVerificationRequestIds() view returns (string[])",
 
   submitPresentation: `function submitPresentation(${PRESENTATION_TUPLE} presentation)`,
   verifyPresentation: "function verifyPresentation(string presentationId) returns (bool)",
