@@ -1,0 +1,102 @@
+{
+  "metadata": {
+    "timestamp": "2026-04-22T00:07:19.008510",
+    "contract": "SSI",
+    "ganache_url": "http://127.0.0.1:8545",
+    "iterations": 5,
+    "scaling_scenarios": [
+      1,
+      2,
+      3,
+      5
+    ]
+  },
+  "operations": {
+    "registration": {
+      "avg_time_ms": 157.77077674865723,
+      "min_time_ms": 142.0598030090332,
+      "max_time_ms": 172.79338836669922,
+      "avg_gas": 445698,
+      "iterations": 5
+    },
+    "claim_request": {
+      "avg_time_ms": 130.0673007965088,
+      "avg_gas": 373914,
+      "iterations": 5
+    },
+    "verification": {
+      "avg_hash_time_ms": 14.771795272827148,
+      "min_hash_time_ms": 14.001607894897461,
+      "max_hash_time_ms": 15.734195709228516,
+      "iterations": 5
+    }
+  },
+  "lifecycle": {
+    "end_to_end": {
+      "avg_time_ms": 0,
+      "avg_gas": 0,
+      "min_time_ms": 0,
+      "max_time_ms": 0,
+      "iterations": 0
+    },
+    "stages_summary": {
+      "registration_avg_ms": 157.77077674865723,
+      "claim_request_avg_ms": 130.0673007965088,
+      "approval_avg_ms": 0,
+      "verification_avg_ms": 14.771795272827148,
+      "total_lifecycle_avg_ms": 0
+    }
+  },
+  "scaling": {
+    "1": {
+      "num_approvers": 1,
+      "avg_time_per_approval_ms": 1182.4528694152832,
+      "total_time_for_all_approvals_ms": 5912.264347076416,
+      "avg_gas_per_approval": 875514.6,
+      "total_gas_scenario": 4377573,
+      "iterations": 5
+    },
+    "2": {
+      "num_approvers": 2,
+      "avg_time_per_approval_ms": 726.6172170639038,
+      "total_time_for_all_approvals_ms": 7266.172170639038,
+      "avg_gas_per_approval": 641503.9,
+      "total_gas_scenario": 6415039,
+      "iterations": 5
+    },
+    "3": {
+      "num_approvers": 3,
+      "avg_time_per_approval_ms": 585.7155481974283,
+      "total_time_for_all_approvals_ms": 8785.733222961426,
+      "avg_gas_per_approval": 566739.7333333333,
+      "total_gas_scenario": 8501096,
+      "iterations": 5
+    }
+  },
+  "lifecycle_metrics_raw": {
+    "registration": [
+      172.79338836669922,
+      171.93174362182617,
+      144.3941593170166,
+      157.67478942871094,
+      142.0598030090332
+    ],
+    "claim_request": [
+      129.32705879211426,
+      127.73656845092773,
+      147.95255661010742,
+      121.61970138549805,
+      123.70061874389648
+    ],
+    "approval": [],
+    "issuance": [],
+    "verification": [
+      14.80555534362793,
+      15.24209976196289,
+      14.001607894897461,
+      14.075517654418945,
+      15.734195709228516
+    ],
+    "total_lifecycle": []
+  }
+}

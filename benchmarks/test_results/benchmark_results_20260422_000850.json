@@ -1,0 +1,102 @@
+{
+  "metadata": {
+    "timestamp": "2026-04-22T00:08:50.651304",
+    "contract": "SSI",
+    "ganache_url": "http://127.0.0.1:8545",
+    "iterations": 5,
+    "scaling_scenarios": [
+      1,
+      2,
+      3,
+      5
+    ]
+  },
+  "operations": {
+    "registration": {
+      "avg_time_ms": 125.61850547790527,
+      "min_time_ms": 118.4234619140625,
+      "max_time_ms": 139.39142227172852,
+      "avg_gas": 445698,
+      "iterations": 5
+    },
+    "claim_request": {
+      "avg_time_ms": 109.3541145324707,
+      "avg_gas": 373914,
+      "iterations": 5
+    },
+    "verification": {
+      "avg_hash_time_ms": 14.748477935791016,
+      "min_hash_time_ms": 13.542652130126953,
+      "max_hash_time_ms": 16.357421875,
+      "iterations": 5
+    }
+  },
+  "lifecycle": {
+    "end_to_end": {
+      "avg_time_ms": 0,
+      "avg_gas": 0,
+      "min_time_ms": 0,
+      "max_time_ms": 0,
+      "iterations": 0
+    },
+    "stages_summary": {
+      "registration_avg_ms": 125.61850547790527,
+      "claim_request_avg_ms": 109.3541145324707,
+      "approval_avg_ms": 0,
+      "verification_avg_ms": 14.748477935791016,
+      "total_lifecycle_avg_ms": 0
+    }
+  },
+  "scaling": {
+    "1": {
+      "num_approvers": 1,
+      "avg_time_per_approval_ms": 1129.5689105987549,
+      "total_time_for_all_approvals_ms": 5647.844552993774,
+      "avg_gas_per_approval": 875514.6,
+      "total_gas_scenario": 4377573,
+      "iterations": 5
+    },
+    "2": {
+      "num_approvers": 2,
+      "avg_time_per_approval_ms": 741.458797454834,
+      "total_time_for_all_approvals_ms": 7414.58797454834,
+      "avg_gas_per_approval": 641223.9,
+      "total_gas_scenario": 6412239,
+      "iterations": 5
+    },
+    "3": {
+      "num_approvers": 3,
+      "avg_time_per_approval_ms": 622.4645137786865,
+      "total_time_for_all_approvals_ms": 9336.967706680298,
+      "avg_gas_per_approval": 566928.8,
+      "total_gas_scenario": 8503932,
+      "iterations": 5
+    }
+  },
+  "lifecycle_metrics_raw": {
+    "registration": [
+      128.04698944091797,
+      118.4234619140625,
+      123.02398681640625,
+      139.39142227172852,
+      119.20666694641113
+    ],
+    "claim_request": [
+      99.53546524047852,
+      108.75844955444336,
+      114.42208290100098,
+      113.89446258544922,
+      110.16011238098145
+    ],
+    "approval": [],
+    "issuance": [],
+    "verification": [
+      14.098644256591797,
+      14.925479888916016,
+      14.818191528320312,
+      13.542652130126953,
+      16.357421875
+    ],
+    "total_lifecycle": []
+  }
+}

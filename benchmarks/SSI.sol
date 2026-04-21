@@ -225,6 +225,62 @@ contract SSI {
     // Track all claim request IDs
     string[] public allRequestIds;
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // EVENTS FOR BENCHMARKING
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    event UserRegistered(
+        string indexed did,
+        address indexed wallet,
+        Role role,
+        uint256 timestamp
+    );
+
+    event ClaimRequestCreated(
+        string indexed requestId,
+        string indexed claimId,
+        string indexed citizenDid,
+        uint256 timestamp
+    );
+
+    event ApproversAssigned(
+        string indexed requestId,
+        uint256 numberOfApprovers,
+        uint256 timestamp
+    );
+
+    event ApprovalSubmitted(
+        string indexed requestId,
+        string indexed approverDid,
+        uint256 approvalsReceived,
+        uint256 approvalsRequired,
+        uint256 timestamp
+    );
+
+    event CredentialIssued(
+        string indexed credentialId,
+        string indexed requestId,
+        string indexed citizenDid,
+        uint256 gasCost,
+        uint256 timestamp
+    );
+
+    event VerificationRequestCreated(
+        string indexed verificationRequestId,
+        string indexed verifierId,
+        string indexed citizenDid,
+        uint256 timestamp
+    );
+
+    event PresentationVerified(
+        string indexed presentationId,
+        string indexed verificationRequestId,
+        bool verified,
+        uint256 timestamp
+    );
+
+    event CredentialRevoked(string indexed credentialId, uint256 timestamp);
+
     modifier onlyGovernance() {
         // Step 1: allow owner always
         if (msg.sender == owner) {
@@ -279,6 +335,8 @@ contract SSI {
             createdAt: block.timestamp,
             processedAt: 0
         });
+
+        emit UserRegistered(did, msg.sender, role, block.timestamp);
     }
 
     function approveUserRequest(string memory did) public onlyGovernance {
@@ -523,6 +581,13 @@ contract SSI {
         req.expiresAt = expiresAt;
 
         allRequestIds.push(requestId);
+
+        emit ClaimRequestCreated(
+            requestId,
+            claimId,
+            citizenDid,
+            block.timestamp
+        );
     }
 
     function getClaimRequest(
@@ -599,8 +664,17 @@ contract SSI {
 
         // Threshold check
         uint256 required = claims[req.claimId].numberOfApprovalsNeeded;
+        uint256 received = requestSignatures[requestId].length;
 
-        if (requestSignatures[requestId].length >= required) {
+        emit ApprovalSubmitted(
+            requestId,
+            signerDid,
+            received,
+            required,
+            block.timestamp
+        );
+
+        if (received >= required) {
             require(
                 req.status == ClaimRequestStatus.IN_REVIEW,
                 "Already processed"
@@ -657,6 +731,14 @@ contract SSI {
     function issueCredential(Credential memory credential) public {
         credentials[credential.credentialId] = credential;
         citizenCredentials[credential.citizenDid].push(credential);
+
+        emit CredentialIssued(
+            credential.credentialId,
+            credential.requestId,
+            credential.citizenDid,
+            0,
+            block.timestamp
+        );
     }
 
     function getCredential(
@@ -674,6 +756,8 @@ contract SSI {
     function revokeCredential(CredentialRevocation memory revocation) public {
         credentialRevocations[revocation.credentialId] = revocation;
         credentials[revocation.credentialId].status = CredentialStatus.REVOKED;
+
+        emit CredentialRevoked(revocation.credentialId, block.timestamp);
     }
 
     function isCredentialRevoked(
@@ -701,6 +785,13 @@ contract SSI {
         request.fulfilled = false;
         request.presentationId = "";
         verificationRequests[request.verificationRequestId] = request;
+
+        emit VerificationRequestCreated(
+            request.verificationRequestId,
+            senderDid,
+            request.citizenDid,
+            block.timestamp
+        );
     }
 
     function getVerificationRequest(
@@ -851,6 +942,13 @@ contract SSI {
         vr.status = VerificationStatus.APPROVED;
         p.verified = true;
 
+        emit PresentationVerified(
+            presentationId,
+            p.verificationRequestId,
+            true,
+            block.timestamp
+        );
+
         return true;
     }
 
@@ -886,6 +984,12 @@ contract SSI {
 
         req.status = ClaimRequestStatus.IN_REVIEW;
         req.updatedAt = block.timestamp;
+
+        emit ApproversAssigned(
+            requestId,
+            _approverDids.length,
+            block.timestamp
+        );
     }
 
     // ── Internal helpers ─────────────────────────────────────────────────
