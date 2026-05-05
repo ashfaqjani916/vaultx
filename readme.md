@@ -106,7 +106,7 @@ The Vite dev server will print the local URL, usually `http://localhost:5173`.
 ```env
 VITE_THIRDWEB_CLIENT_ID=
 VITE_SSI_CONTRACT_ADDRESS=
-VITE_SSI_CHAIN_ID=11155111 #sepolia
+VITE_SSI_CHAIN_ID=11155111
 ```
 
 Additional variables used by the codebase:
