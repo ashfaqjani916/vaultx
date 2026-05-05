@@ -1,7 +1,7 @@
 import { FormEvent, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { AlertCircle, CheckCircle2, Copy, Download, Eye, EyeOff, Hexagon, Loader2, RefreshCcw, Shield, Wallet } from 'lucide-react'
+import { AlertCircle, CheckCircle2, Copy, Download, Hexagon, Loader2, RefreshCcw, Shield, Wallet } from 'lucide-react'
 import { useActiveAccount, useConnect, useSendAndConfirmTransaction } from 'thirdweb/react'
 import { createWallet } from 'thirdweb/wallets'
 import { Button } from '@/components/ui/button'
@@ -24,17 +24,11 @@ type RegisterPayload = {
 
 type FormState = {
   role: OnchainUserRole
-  password: string
-  confirmPassword: string
 }
 
 const DEFAULT_FORM: FormState = {
   role: 'citizen',
-  password: '',
-  confirmPassword: '',
 }
-
-const VAULT_API_URL = import.meta.env.VITE_VAULT_API_URL || 'http://localhost:8080'
 
 const toHex = (bytes: Uint8Array): string =>
   Array.from(bytes)
@@ -69,7 +63,6 @@ export default function RegisterUser() {
   const [error, setError] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const [copyMessage, setCopyMessage] = useState<string | null>(null)
-  const [showPassword, setShowPassword] = useState(false)
 
   const payload = useMemo<RegisterPayload>(
     () => ({
@@ -156,21 +149,6 @@ export default function RegisterUser() {
       return
     }
 
-    if (!form.password) {
-      setError('Password is required.')
-      return
-    }
-
-    if (form.password.length < 8) {
-      setError('Password must be at least 8 characters.')
-      return
-    }
-
-    if (form.password !== form.confirmPassword) {
-      setError('Passwords do not match.')
-      return
-    }
-
     setSubmitting(true)
     try {
       const transaction = prepareContractCall({
@@ -180,24 +158,6 @@ export default function RegisterUser() {
       })
 
       await sendAndConfirmTransactionAsync(transaction)
-
-      // Store signing and encryption keys in the vault
-      const storeKey = async (publicKey: string, privateKey: string) => {
-        const res = await fetch(`${VAULT_API_URL}/api/v1/keys`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ public_key: publicKey, private_key: privateKey, password: form.password }),
-        })
-        if (!res.ok) {
-          const body = await res.json().catch(() => null)
-          throw new Error(body?.error || `Vault API error (${res.status})`)
-        }
-      }
-
-      await Promise.all([
-        storeKey(payload.signingPublicKey, payload.signingPrivateKey),
-        storeKey(payload.encryptionPublicKey, payload.encryptionPrivateKey),
-      ])
 
       // Redirect to appropriate dashboard based on selected role
       const roleRoutes: Record<OnchainUserRole, string> = {
@@ -254,39 +214,6 @@ export default function RegisterUser() {
                   <SelectItem value="governance">Governance</SelectItem>
                 </SelectContent>
               </Select>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="password">Password</Label>
-              <div className="relative">
-                <Input
-                  id="password"
-                  type={showPassword ? 'text' : 'password'}
-                  placeholder="Min 8 characters"
-                  value={form.password}
-                  onChange={(e) => setForm((prev) => ({ ...prev, password: e.target.value }))}
-                  className="pr-10"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword((v) => !v)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                >
-                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                </button>
-              </div>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="confirmPassword">Confirm Password</Label>
-              <Input
-                id="confirmPassword"
-                type={showPassword ? 'text' : 'password'}
-                placeholder="Re-enter password"
-                value={form.confirmPassword}
-                onChange={(e) => setForm((prev) => ({ ...prev, confirmPassword: e.target.value }))}
-              />
-              <p className="text-xs text-muted-foreground">Used to encrypt your private keys in the vault.</p>
             </div>
 
             <div className="rounded-lg border border-border bg-muted/30 p-3 space-y-2">
