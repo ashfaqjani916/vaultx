@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useActiveAccount, useConnect, useReadContract } from 'thirdweb/react'
-import { createWallet } from 'thirdweb/wallets'
+import { createWallet, inAppWallet } from 'thirdweb/wallets'
 import { motion } from 'framer-motion'
-import { Hexagon, Shield, Loader2, Wallet, AlertCircle } from 'lucide-react'
+import { Hexagon, Shield, Loader2, Wallet, AlertCircle, Mail } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { thirdwebClient, ssiChain, ssiContractAddress } from '@/lib/thirdweb'
@@ -96,6 +96,26 @@ export default function Login() {
     }
   }
 
+  const handleGoogleConnect = async () => {
+    setConnectError(null)
+    try {
+      await connect(async () => {
+        const wallet = inAppWallet()
+        await wallet.connect({
+          client: thirdwebClient,
+          strategy: 'google',
+        })
+        return wallet
+      })
+    } catch (err) {
+      const msg =
+        err instanceof Error
+          ? err.message
+          : 'Could not connect with Google. Please try again.'
+      setConnectError(msg)
+    }
+  }
+
   const isCheckingUser = Boolean(account) && publicUserPending
 
   return (
@@ -132,7 +152,7 @@ export default function Login() {
           {/* Heading */}
           <div className="text-center">
             <h1 className="text-xl font-bold tracking-tight">Welcome to VaultX</h1>
-            <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed">Connect your MetaMask wallet to access your identity dashboard</p>
+            <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed">Sign in with Google or connect your wallet to access your identity dashboard</p>
           </div>
 
           {/* Action area */}
@@ -143,6 +163,29 @@ export default function Login() {
             </div>
           ) : (
             <div className="space-y-3">
+              <Button onClick={handleGoogleConnect} disabled={isConnecting} variant="outline" className="w-full font-semibold h-11 border-border hover:bg-accent">
+                {isConnecting ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Connecting…
+                  </>
+                ) : (
+                  <>
+                    <Mail className="h-4 w-4 mr-2" />
+                    Sign in with Google
+                  </>
+                )}
+              </Button>
+
+              <div className="relative">
+                <div className="absolute inset-0 flex items-center">
+                  <span className="w-full border-t border-border" />
+                </div>
+                <div className="relative flex justify-center text-xs uppercase">
+                  <span className="bg-card px-2 text-muted-foreground">Or</span>
+                </div>
+              </div>
+
               <Button onClick={handleConnect} disabled={isConnecting} className="w-full gradient-primary text-primary-foreground font-semibold h-11">
                 {isConnecting ? (
                   <>
@@ -172,7 +215,7 @@ export default function Login() {
 
           {/* Footer */}
           <p className="text-xs text-muted-foreground text-center">
-            MetaMask browser extension required.{' '}
+            Choose your preferred sign-in method.{' '}
             <a href="https://metamask.io/download" target="_blank" rel="noopener noreferrer" className="underline hover:text-foreground transition-colors">
               Get MetaMask
             </a>

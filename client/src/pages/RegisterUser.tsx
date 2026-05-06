@@ -63,6 +63,7 @@ export default function RegisterUser() {
   const [error, setError] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
   const [copyMessage, setCopyMessage] = useState<string | null>(null)
+  const [walletCopied, setWalletCopied] = useState(false)
 
   const payload = useMemo<RegisterPayload>(
     () => ({
@@ -92,6 +93,17 @@ export default function RegisterUser() {
       setCopyMessage('Generated identity copied to clipboard.')
     } catch {
       setCopyMessage('Unable to copy generated identity.')
+    }
+  }
+
+  const copyWalletAddress = async () => {
+    if (!account?.address) return
+    try {
+      await navigator.clipboard.writeText(account.address)
+      setWalletCopied(true)
+      setTimeout(() => setWalletCopied(false), 2000)
+    } catch {
+      // Silently fail
     }
   }
 
@@ -199,6 +211,34 @@ export default function RegisterUser() {
             <h1 className="text-xl font-bold tracking-tight">Register New User</h1>
             <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed">DID and public keys are generated client-side and submitted directly on-chain.</p>
           </div>
+
+          {account?.address && (
+            <div className="rounded-lg border border-border bg-muted/30 p-3">
+              <div className="flex items-center justify-between gap-2 mb-1.5">
+                <Label className="text-xs font-medium text-muted-foreground">Connected Wallet</Label>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-2"
+                  onClick={copyWalletAddress}
+                >
+                  {walletCopied ? (
+                    <>
+                      <CheckCircle2 className="h-3 w-3 mr-1 text-emerald-600" />
+                      <span className="text-xs text-emerald-600">Copied!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-3 w-3 mr-1" />
+                      <span className="text-xs">Copy</span>
+                    </>
+                  )}
+                </Button>
+              </div>
+              <p className="text-sm font-mono break-all">{account.address}</p>
+            </div>
+          )}
 
           <form className="space-y-4" onSubmit={handleSubmit}>
             <div className="space-y-1.5">
