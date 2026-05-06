@@ -27,6 +27,7 @@ import {
   Camera,
   ExternalLink,
   Copy,
+  RefreshCw,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -46,7 +47,7 @@ import { useOnchainCredentials } from '@/hooks/useOnchainCredentials'
 import { claimRequestStatusLabel, claimStatusLabel, credentialStatusLabel, parseSsiClaim, parseSsiVerificationRequest } from '@/lib/ssiParsers'
 import { uploadJsonToIPFS, uploadToIPFS, getIPFSUrl, fetchFromIPFS } from '@/lib/ipfs'
 import { isSsiContractConfigured, ssiChain, ssiContractAddress, thirdwebClient } from '@/lib/thirdweb'
-import { useQueries } from '@tanstack/react-query'
+import { useQueries, useQueryClient } from '@tanstack/react-query'
 import { getContract, prepareContractCall, readContract } from 'thirdweb'
 import { useActiveAccount, useActiveWallet, useDisconnect, useReadContract, useSendAndConfirmTransaction, useContractEvents } from 'thirdweb/react'
 import { parseVerificationQrPayload, type VerificationQrPayload } from '@/lib/verificationQr'
@@ -143,10 +144,37 @@ export default function CitizenDashboard() {
   const { disconnect } = useDisconnect()
   const { did, user, isConnected } = useOnchainUser()
   const isApproved = Boolean(user?.isApproved)
+  const queryClient = useQueryClient()
+  const [isRefreshing, setIsRefreshing] = useState(false)
 
   const handleSignOut = () => {
     if (activeWallet) disconnect(activeWallet)
     navigate('/', { replace: true })
+  }
+
+  const handleRefreshAll = async () => {
+    setIsRefreshing(true)
+    try {
+      // Invalidate all relevant queries to trigger refetch
+      await queryClient.invalidateQueries({ queryKey: ['ssi-claim'] })
+      await queryClient.invalidateQueries({ queryKey: ['thirdweb-contract'] })
+      
+      // Also refetch claim requests
+      await refetchRequests()
+      
+      toast({ 
+        title: 'Refreshed',
+        description: 'All contract data has been refreshed'
+      })
+    } catch (error) {
+      toast({ 
+        title: 'Refresh failed',
+        description: error instanceof Error ? error.message : 'Failed to refresh data',
+        variant: 'destructive'
+      })
+    } finally {
+      setIsRefreshing(false)
+    }
   }
 
   const { definitions, isLoading: defsLoading } = useOnchainClaimDefinitions()
@@ -364,8 +392,10 @@ export default function CitizenDashboard() {
         description: `Your credentials have been submitted for verification. Presentation ID: ${presentationId}`,
       })
 
-      // Clear selection after submission
+      // Clear selection and close the presentation view after submission
       setSelectedPresentationCredentials(new Set())
+      setDecodedQrPayload(null)
+      setQrPayloadInput('')
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Failed to sign and submit presentation.'
       setPresentationError(errorMsg)
@@ -1250,6 +1280,16 @@ export default function CitizenDashboard() {
                      </button>
                    </div>
                  )}
+                 <Button 
+                    
+                   size="sm" 
+                   onClick={handleRefreshAll} 
+                   disabled={isRefreshing}
+                   className="text-xs text-muted-foreground hover:text-foreground gap-1.5"
+                   title="Refresh all data"
+                 >
+                   <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+                 </Button>
                  <Button variant="ghost" size="sm" onClick={handleSignOut} className="text-xs text-muted-foreground hover:text-foreground gap-1.5">
                    <LogOut className="h-3.5 w-3.5" />
                    Sign Out
@@ -1342,7 +1382,7 @@ export default function CitizenDashboard() {
                       ) : (
                         <>
                           <ScanLine className="h-4 w-4 mr-1.5" />
-                          Scan QR Image
+                          Upload QR
                         </>
                       )}
                     </Button>
