@@ -24,6 +24,9 @@ import {
   ScanLine,
   Send,
   Signature,
+  Camera,
+  ExternalLink,
+  Copy,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -41,7 +44,7 @@ import { useOnchainClaimDefinitions } from '@/hooks/useOnchainClaimDefinitions'
 import { useOnchainClaimRequests } from '@/hooks/useOnchainClaimRequests'
 import { useOnchainCredentials } from '@/hooks/useOnchainCredentials'
 import { claimRequestStatusLabel, claimStatusLabel, credentialStatusLabel, parseSsiClaim, parseSsiVerificationRequest } from '@/lib/ssiParsers'
-import { uploadJsonToIPFS, uploadToIPFS } from '@/lib/ipfs'
+import { uploadJsonToIPFS, uploadToIPFS, getIPFSUrl, fetchFromIPFS } from '@/lib/ipfs'
 import { isSsiContractConfigured, ssiChain, ssiContractAddress, thirdwebClient } from '@/lib/thirdweb'
 import { useQueries } from '@tanstack/react-query'
 import { getContract, prepareContractCall, readContract } from 'thirdweb'
@@ -59,12 +62,45 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
+function shortAddress(address: string): string {
+  if (!address) return ''
+  return `${address.slice(0, 6)}...${address.slice(-4)}`
+}
+
 function FileIcon({ name, size = 'sm' }: { name: string; size?: 'sm' | 'md' }) {
   const ext = name.split('.').pop()?.toLowerCase() ?? ''
   const cls = size === 'md' ? 'h-5 w-5' : 'h-4 w-4'
   if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(ext)) return <FileImage className={`${cls} text-blue-400`} />
   if (ext === 'pdf') return <FileText className={`${cls} text-red-400`} />
   return <File className={`${cls} text-muted-foreground`} />
+}
+
+type IPFSMetadata = {
+  documentFields: Record<string, string>
+  fileName: string
+  fileSize: number
+  fileType: string
+  fileCid: string
+  uploadedAt: string
+}
+
+type RequestAsset = {
+  label: string
+  key: 'documentHash' | 'photoHash' | 'geolocationHash' | 'biometricHash'
+  hash: string
+}
+
+const REQUEST_ASSET_KEYS: Array<{ label: string; key: RequestAsset['key'] }> = [
+  { label: 'Document', key: 'documentHash' },
+  { label: 'Photo', key: 'photoHash' },
+  { label: 'Geo Tag', key: 'geolocationHash' },
+  { label: 'Biometric', key: 'biometricHash' },
+]
+
+function isIPFSMetadata(value: unknown): value is IPFSMetadata {
+  if (!value || typeof value !== 'object') return false
+  const v = value as Partial<IPFSMetadata>
+  return typeof v.fileCid === 'string' && typeof v.fileName === 'string'
 }
 
 const cardAnim = (i: number) => ({
@@ -366,9 +402,24 @@ export default function CitizenDashboard() {
   const [isDragging, setIsDragging] = useState(false)
   const [uploadProgress, setUploadProgress] = useState(0)
   const [isUploading, setIsUploading] = useState(false)
+  const [isPhotoCameraOpen, setIsPhotoCameraOpen] = useState(false)
+  const [isPhotoVideoReady, setIsPhotoVideoReady] = useState(false)
+  const [photoCameraStream, setPhotoCameraStream] = useState<MediaStream | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const photoInputRef = useRef<HTMLInputElement>(null)
   const biometricInputRef = useRef<HTMLInputElement>(null)
+  const photoVideoRef = useRef<HTMLVideoElement>(null)
+  const photoCanvasRef = useRef<HTMLCanvasElement>(null)
+
+  // Preview state
+  const [previewOpen, setPreviewOpen] = useState(false)
+  const [previewRequest, setPreviewRequest] = useState<typeof myRequests[0] | null>(null)
+  const [ipfsDataByHash, setIpfsDataByHash] = useState<Record<string, unknown>>({})
+  const [loadingIpfs, setLoadingIpfs] = useState(false)
+
+  // Credential preview state
+  const [credentialPreviewOpen, setCredentialPreviewOpen] = useState(false)
+  const [previewCredential, setPreviewCredential] = useState<typeof activeCredentials[0] | null>(null)
 
   const selectedDef = availableDefs.find((d) => d.id === selectedClaimId)
 
@@ -402,10 +453,227 @@ export default function CitizenDashboard() {
     e.target.value = ''
   }
 
+  const openPhotoCamera = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+      })
+      setPhotoCameraStream(stream)
+      setIsPhotoCameraOpen(true)
+      setIsPhotoVideoReady(false)
+      
+      // Wait for next tick to ensure video element is rendered
+      setTimeout(() => {
+        if (photoVideoRef.current) {
+          photoVideoRef.current.srcObject = stream
+          // Wait for video to be ready
+          photoVideoRef.current.onloadedmetadata = () => {
+            setIsPhotoVideoReady(true)
+          }
+        }
+      }, 100)
+    } catch (error) {
+      toast({
+        title: 'Camera access denied',
+        description: 'Please allow camera access to capture photos.',
+        variant: 'destructive',
+      })
+    }
+  }
+
+  const closePhotoCamera = () => {
+    if (photoCameraStream) {
+      photoCameraStream.getTracks().forEach(track => track.stop())
+      setPhotoCameraStream(null)
+    }
+    setIsPhotoCameraOpen(false)
+    setIsPhotoVideoReady(false)
+  }
+
+  const capturePhoto = () => {
+    if (!photoVideoRef.current || !photoCanvasRef.current) {
+      toast({
+        title: 'Error',
+        description: 'Camera not ready. Please try again.',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    const video = photoVideoRef.current
+    const canvas = photoCanvasRef.current
+    
+    // Check if video is ready
+    if (video.videoWidth === 0 || video.videoHeight === 0) {
+      toast({
+        title: 'Error',
+        description: 'Video not ready. Please wait a moment.',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    canvas.width = video.videoWidth
+    canvas.height = video.videoHeight
+
+    const ctx = canvas.getContext('2d')
+    if (!ctx) {
+      toast({
+        title: 'Error',
+        description: 'Failed to get canvas context.',
+        variant: 'destructive',
+      })
+      return
+    }
+
+    ctx.drawImage(video, 0, 0)
+    
+    canvas.toBlob((blob) => {
+      if (!blob) {
+        toast({
+          title: 'Error',
+          description: 'Failed to capture photo.',
+          variant: 'destructive',
+        })
+        return
+      }
+      
+      const timestamp = new Date().getTime()
+      // Use window.File to avoid conflict with lucide-react File icon
+      const file = new window.File([blob], `photo_${timestamp}.jpg`, { type: 'image/jpeg' })
+      setPhotoFile(file)
+      closePhotoCamera()
+      
+      toast({
+        title: 'Photo captured',
+        description: 'Photo has been captured successfully.',
+      })
+    }, 'image/jpeg', 0.9)
+  }
+
   const handleBiometricInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files?.[0]) return
     setBiometricFile(e.target.files[0])
     e.target.value = ''
+  }
+
+  // Preview functions
+  const openPreview = async (request: typeof myRequests[0]) => {
+    setPreviewRequest(request)
+    setPreviewOpen(true)
+    await loadIpfsMetadata(request)
+  }
+
+  const openCredentialPreview = (credential: typeof activeCredentials[0]) => {
+    setPreviewCredential(credential)
+    setCredentialPreviewOpen(true)
+  }
+
+  const loadIpfsMetadata = async (request: typeof myRequests[0]) => {
+    const hashes = REQUEST_ASSET_KEYS.map((ak) => request[ak.key]).filter((h) => h && h.trim().length > 0)
+    if (hashes.length === 0) return
+
+    setLoadingIpfs(true)
+    try {
+      const fetched: Record<string, unknown> = {}
+      for (const hash of hashes) {
+        if (ipfsDataByHash[hash]) {
+          fetched[hash] = ipfsDataByHash[hash]
+          continue
+        }
+        try {
+          const data = await fetchFromIPFS(hash)
+          fetched[hash] = data
+        } catch (err) {
+          console.error(`Failed to fetch ${hash}:`, err)
+        }
+      }
+      setIpfsDataByHash((prev) => ({ ...prev, ...fetched }))
+    } catch (err) {
+      console.error('Failed to fetch IPFS metadata:', err)
+    } finally {
+      setLoadingIpfs(false)
+    }
+  }
+
+  const renderAssetPreview = (asset: RequestAsset) => {
+    const loaded = ipfsDataByHash[asset.hash]
+
+    if (!loaded) {
+      return (
+        <div className="rounded-lg bg-muted/50 border border-border p-3">
+          <div className="flex items-center gap-2">
+            <FileText className="h-4 w-4 text-primary" />
+            <div className="flex-1">
+              <p className="text-xs font-medium">{asset.label} on IPFS</p>
+              <code className="text-[10px] text-muted-foreground font-mono break-all">{asset.hash}</code>
+            </div>
+            <a href={getIPFSUrl(asset.hash)} target="_blank" rel="noopener noreferrer">
+              <Button variant="outline" size="sm" className="h-7 text-xs gap-1">
+                <ExternalLink className="h-3 w-3" />
+                View
+              </Button>
+            </a>
+          </div>
+        </div>
+      )
+    }
+
+    if (isIPFSMetadata(loaded)) {
+      return (
+        <div className="space-y-3">
+          <div className="rounded-lg bg-muted/50 border border-border p-3">
+            <div className="flex items-center gap-2.5 mb-2">
+              <FileIcon name={loaded.fileName} />
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-medium truncate">{loaded.fileName}</p>
+                <p className="text-[10px] text-muted-foreground">
+                  {loaded.fileType} &middot; {loaded.fileSize > 0 ? `${(loaded.fileSize / 1024).toFixed(1)} KB` : '—'}
+                </p>
+              </div>
+              <a href={getIPFSUrl(loaded.fileCid)} target="_blank" rel="noopener noreferrer">
+                <Button variant="outline" size="sm" className="h-7 text-xs gap-1">
+                  <ExternalLink className="h-3 w-3" />
+                  View File
+                </Button>
+              </a>
+            </div>
+            <div className="text-[10px] text-muted-foreground border-t border-border/60 pt-2 mt-2 space-y-1">
+              <div>
+                <span>Metadata CID: </span>
+                <code className="font-mono break-all">{asset.hash}</code>
+              </div>
+              <div>
+                <span>File CID: </span>
+                <code className="font-mono break-all">{loaded.fileCid}</code>
+              </div>
+            </div>
+          </div>
+
+          {Object.keys(loaded.documentFields).length > 0 && (
+            <div className="rounded-lg bg-muted/50 border border-border p-3">
+              <p className="text-xs font-medium mb-2">Metadata Fields</p>
+              <div className="space-y-1.5">
+                {Object.entries(loaded.documentFields).map(([key, value]) => (
+                  <div key={key} className="flex items-center justify-between text-xs gap-4">
+                    <span className="text-muted-foreground capitalize">{key.replace(/([A-Z])/g, ' $1').trim()}</span>
+                    <span className="font-medium text-right break-all">{value || '—'}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )
+    }
+
+    return (
+      <div className="rounded-lg bg-muted/50 border border-border p-3 space-y-2">
+        <p className="text-xs font-medium">{asset.label} JSON Payload</p>
+        <code className="text-[10px] text-muted-foreground font-mono break-all block">{asset.hash}</code>
+        <pre className="text-[10px] bg-background/60 border border-border rounded p-2 overflow-x-auto">{JSON.stringify(loaded, null, 2)}</pre>
+      </div>
+    )
   }
 
   const captureCurrentLocation = async () => {
@@ -814,6 +1082,7 @@ export default function CitizenDashboard() {
 
   const closeModal = () => {
     if (isUploading) return
+    closePhotoCamera() // Close camera if open
     setUploadOpen(false)
     setDocumentFile(null)
     setPhotoFile(null)
@@ -958,10 +1227,34 @@ export default function CitizenDashboard() {
           <span className="text-lg font-bold tracking-tight">VaultX</span>
           <span className="text-[11px] bg-primary/10 text-primary px-2 py-0.5 rounded-full font-semibold ml-1 tracking-wide">CITIZEN</span>
         </div>
-        <Button variant="ghost" size="sm" onClick={handleSignOut} className="text-xs text-muted-foreground hover:text-foreground gap-1.5">
-          <LogOut className="h-3.5 w-3.5" />
-          Sign Out
-        </Button>
+       <div className="flex items-center gap-3">
+                 {account && (
+                   <div className="flex items-center gap-2 text-xs font-mono text-muted-foreground bg-muted px-3 py-1.5 rounded-lg">
+                     <span className="relative flex h-2 w-2">
+                       <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+                       <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
+                     </span>
+                     <span>{shortAddress(account.address)}</span>
+                     <button
+                       onClick={() => {
+                         navigator.clipboard.writeText(account.address)
+                         toast({
+                           title: 'Address copied',
+                           description: 'Wallet address copied to clipboard',
+                         })
+                       }}
+                       className="ml-1 p-1 hover:bg-muted-foreground/10 rounded transition-colors"
+                       title="Copy address"
+                     >
+                       <Copy className="h-3 w-3" />
+                     </button>
+                   </div>
+                 )}
+                 <Button variant="ghost" size="sm" onClick={handleSignOut} className="text-xs text-muted-foreground hover:text-foreground gap-1.5">
+                   <LogOut className="h-3.5 w-3.5" />
+                   Sign Out
+                 </Button>
+               </div>
       </nav>
 
       {/* ── Content ── */}
@@ -1276,7 +1569,7 @@ export default function CitizenDashboard() {
                   const claimDef = definitions.find((d) => d.claimId === cred.claimId)
                   return (
                     <motion.div key={cred.credentialId} {...cardAnim(i)}>
-                      <Card className="p-4 shadow-card border-border bg-card hover:shadow-elevated transition-shadow">
+                      <Card className="p-4 shadow-card border-border bg-card hover:shadow-elevated transition-shadow cursor-pointer" onClick={() => openCredentialPreview(cred)}>
                         <div className="flex items-start justify-between mb-3">
                           <div className="h-9 w-9 rounded-lg bg-success/10 flex items-center justify-center">
                             <CheckCircle2 className="h-5 w-5 text-success" />
@@ -1289,6 +1582,12 @@ export default function CitizenDashboard() {
                           <code className="text-[10px] font-mono text-muted-foreground truncate">{cred.credentialId}</code>
                         </div>
                         <p className="text-[10px] text-muted-foreground mt-1">Issued {cred.issuedAt > 0n ? new Date(Number(cred.issuedAt) * 1000).toLocaleDateString() : '—'}</p>
+                        <div className="flex items-center justify-end mt-3 pt-3 border-t border-border/50">
+                          <div className="flex items-center gap-1 text-[10px] text-primary">
+                            <Eye className="h-3 w-3" />
+                            <span>Click to view details</span>
+                          </div>
+                        </div>
                       </Card>
                     </motion.div>
                   )
@@ -1312,17 +1611,18 @@ export default function CitizenDashboard() {
                 <TableHeader>
                   <TableRow className="bg-muted/50">
                     <TableHead className="text-xs">Request ID</TableHead>
-                    <TableHead className="text-xs">Document Type</TableHead>
+                    <TableHead className="text-xs">Claim/Identity Type</TableHead>
                     <TableHead className="text-xs">IPFS Hash</TableHead>
                     <TableHead className="text-xs">Submitted</TableHead>
-                    <TableHead className="text-xs">Approvers</TableHead>
+                    <TableHead className="text-xs">Approvers (assigned)</TableHead>
                     <TableHead className="text-xs">Status</TableHead>
+                    <TableHead className="text-xs text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {myRequests.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={6} className="text-center py-10">
+                      <TableCell colSpan={7} className="text-center py-10">
                         <Shield className="h-8 w-8 text-muted-foreground/20 mx-auto mb-2" />
                         <p className="text-xs text-muted-foreground">No documents uploaded yet. Click "Upload Document" to get started.</p>
                       </TableCell>
@@ -1353,6 +1653,17 @@ export default function CitizenDashboard() {
                           </TableCell>
                           <TableCell>
                             <StatusBadge status={claimRequestStatusLabel(req.status)} />
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 text-xs"
+                              onClick={() => openPreview(req)}
+                            >
+                              <Eye className="h-3 w-3 mr-1" />
+                              Preview
+                            </Button>
                           </TableCell>
                         </TableRow>
                       )
@@ -1461,17 +1772,62 @@ export default function CitizenDashboard() {
             {/* Photo upload */}
             {selectedClaimId && selectedDef?.photoRequired && (
               <div>
-                <Label className="text-xs mb-1.5 block">Upload Photo *</Label>
-                <div
-                  onClick={() => !isUploading && photoInputRef.current?.click()}
-                  className={[
-                    'relative border-2 border-dashed rounded-xl p-4 text-center transition-all',
-                    isUploading ? 'opacity-50 cursor-not-allowed border-border' : 'cursor-pointer border-border hover:border-primary/50 hover:bg-muted/30',
-                  ].join(' ')}
+                <Label className="text-xs mb-1.5 block">Capture Photo *</Label>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="w-full h-auto py-4"
+                  onClick={openPhotoCamera}
+                  disabled={isUploading || isPhotoCameraOpen}
                 >
-                  <input ref={photoInputRef} type="file" className="hidden" onChange={handlePhotoInput} accept=".jpg,.jpeg,.png,.webp" disabled={isUploading} />
-                  <p className="text-xs text-muted-foreground">Click to select a photo (JPG, PNG, WEBP)</p>
-                </div>
+                  <div className="flex flex-col items-center gap-2">
+                    <Camera className="h-6 w-6" />
+                    <span className="text-sm font-medium">Take Photo</span>
+                    <span className="text-[10px] text-muted-foreground">Open camera to capture</span>
+                  </div>
+                </Button>
+
+                {/* Camera preview modal */}
+                {isPhotoCameraOpen && (
+                  <div className="fixed inset-0 bg-black/90 flex items-center justify-center p-4" style={{ zIndex: 9999 }}>
+                    <div className="bg-card rounded-xl p-4 max-w-2xl w-full space-y-4">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-sm font-semibold">Capture Photo</h3>
+                        <Button variant="ghost" size="icon" onClick={closePhotoCamera}>
+                          <X className="h-4 w-4" />
+                        </Button>
+                      </div>
+                      <div className="relative aspect-video bg-black rounded-lg overflow-hidden">
+                        <video
+                          ref={photoVideoRef}
+                          autoPlay
+                          playsInline
+                          muted
+                          className="w-full h-full object-cover"
+                        />
+                        <canvas ref={photoCanvasRef} className="hidden" />
+                        {!isPhotoVideoReady && (
+                          <div className="absolute inset-0 flex items-center justify-center">
+                            <Loader2 className="h-8 w-8 animate-spin text-white" />
+                          </div>
+                        )}
+                      </div>
+                      <div className="flex gap-2">
+                        <Button variant="outline" className="flex-1" onClick={closePhotoCamera}>
+                          Cancel
+                        </Button>
+                        <Button 
+                          className="flex-1 gradient-primary text-primary-foreground" 
+                          onClick={capturePhoto}
+                          disabled={!isPhotoVideoReady}
+                        >
+                          <Camera className="h-4 w-4 mr-1.5" />
+                          Capture
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1638,6 +1994,218 @@ export default function CitizenDashboard() {
                 )}
               </Button>
             </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Preview Modal ── */}
+      <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Eye className="h-4 w-4 text-primary" />
+              Document Preview
+            </DialogTitle>
+            <DialogDescription>
+              View your uploaded documents and approval details
+            </DialogDescription>
+          </DialogHeader>
+
+          {previewRequest && (
+            <div className="space-y-4 mt-2">
+              {/* Request info */}
+              <div className="rounded-lg bg-muted/50 border border-border p-4 space-y-2">
+                <p className="text-xs font-semibold text-primary mb-3">Request Information</p>
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold">Request ID</p>
+                  <code className="text-xs font-mono text-muted-foreground">{previewRequest.requestId}</code>
+                </div>
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold">Claim/Identity Type</p>
+                  <p className="text-xs">{definitions.find((d) => d.claimId === previewRequest.claimId)?.claimType || previewRequest.claimId}</p>
+                </div>
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold">Status</p>
+                  <StatusBadge status={claimRequestStatusLabel(previewRequest.status)} />
+                </div>
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold">Submitted by You</p>
+                  <p className="text-xs text-muted-foreground">
+                    {previewRequest.createdAt > 0n ? new Date(Number(previewRequest.createdAt) * 1000).toLocaleString() : '—'}
+                  </p>
+                </div>
+                {previewRequest.updatedAt > 0n && previewRequest.updatedAt !== previewRequest.createdAt && (
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-semibold">Last Updated</p>
+                    <p className="text-xs text-muted-foreground">
+                      {new Date(Number(previewRequest.updatedAt) * 1000).toLocaleString()}
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Assets - Citizen Uploaded */}
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <Upload className="h-4 w-4 text-blue-500" />
+                  <p className="text-xs font-semibold text-blue-600 dark:text-blue-400">Your Uploaded Documents</p>
+                </div>
+                {loadingIpfs && (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground py-4">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Loading from IPFS...
+                  </div>
+                )}
+                {REQUEST_ASSET_KEYS.map((ak) => {
+                  const hash = previewRequest[ak.key]
+                  if (!hash || hash.trim().length === 0) return null
+                  return (
+                    <div key={ak.key}>
+                      {renderAssetPreview({ label: ak.label, key: ak.key, hash })}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          <div className="flex justify-end mt-4">
+            <Button variant="outline" onClick={() => setPreviewOpen(false)}>
+              Close
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Credential Preview Modal ── */}
+      <Dialog open={credentialPreviewOpen} onOpenChange={setCredentialPreviewOpen}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Award className="h-4 w-4 text-success" />
+              Credential Details
+            </DialogTitle>
+            <DialogDescription>
+              View your issued credential information
+            </DialogDescription>
+          </DialogHeader>
+
+          {previewCredential && (
+            <div className="space-y-4 mt-2">
+              {/* Credential Info */}
+              <div className="rounded-lg bg-success/5 border border-success/20 p-4 space-y-2">
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="h-8 w-8 rounded-lg bg-success/15 flex items-center justify-center">
+                    <CheckCircle2 className="h-5 w-5 text-success" />
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold text-success">Verified Credential</p>
+                    <p className="text-[10px] text-muted-foreground">Blockchain-verified identity credential</p>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold">Credential ID</p>
+                  <code className="text-xs font-mono text-muted-foreground">{previewCredential.credentialId}</code>
+                </div>
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold">Claim/Identity Type</p>
+                  <p className="text-xs">{definitions.find((d) => d.claimId === previewCredential.claimId)?.claimType || previewCredential.claimId}</p>
+                </div>
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold">Description</p>
+                  <p className="text-xs">{definitions.find((d) => d.claimId === previewCredential.claimId)?.description || '—'}</p>
+                </div>
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold">Status</p>
+                  <StatusBadge status={credentialStatusLabel(previewCredential.status)} />
+                </div>
+              </div>
+
+              {/* Issuance Details */}
+              <div className="rounded-lg bg-muted/50 border border-border p-4 space-y-2">
+                <p className="text-xs font-semibold text-primary mb-3">Issuance Information</p>
+                
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold">Issued On</p>
+                  <p className="text-xs text-muted-foreground">
+                    {previewCredential.issuedAt > 0n ? new Date(Number(previewCredential.issuedAt) * 1000).toLocaleString() : '—'}
+                  </p>
+                </div>
+
+                {previewCredential.expiresAt > 0n && (
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-semibold">Expires On</p>
+                    <p className="text-xs text-muted-foreground">
+                      {new Date(Number(previewCredential.expiresAt) * 1000).toLocaleString()}
+                    </p>
+                  </div>
+                )}
+
+                {previewCredential.revokedAt > 0n && (
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs font-semibold text-destructive">Revoked On</p>
+                    <p className="text-xs text-destructive">
+                      {new Date(Number(previewCredential.revokedAt) * 1000).toLocaleString()}
+                    </p>
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold">Request ID</p>
+                  <code className="text-xs font-mono text-muted-foreground">{previewCredential.requestId}</code>
+                </div>
+
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-semibold">Claim ID</p>
+                  <code className="text-xs font-mono text-muted-foreground">{previewCredential.claimId}</code>
+                </div>
+              </div>
+    
+
+              {/* Signatures */}
+              {previewCredential.signatures.length > 0 && (
+                <div className="rounded-lg bg-primary/5 border border-primary/20 p-4 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <Signature className="h-4 w-4 text-primary" />
+                    <p className="text-xs font-semibold text-primary">Digital Signatures ({previewCredential.signatures.length})</p>
+                  </div>
+                  <p className="text-[10px] text-muted-foreground">
+                    Cryptographic signatures from authorized approvers verifying this credential
+                  </p>
+                  <div className="space-y-2">
+                    {previewCredential.signatures.map((sig, idx) => (
+                      <div key={idx} className="bg-background/60 rounded-lg p-2">
+                        <div className="flex items-center gap-2 mb-1">
+                          <CheckCircle2 className="h-3 w-3 text-success shrink-0" />
+                          <p className="text-[10px] font-semibold">Signature {idx + 1}</p>
+                        </div>
+                        <code className="text-[9px] font-mono text-muted-foreground break-all block">
+                          {sig}
+                        </code>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Blockchain Info */}
+              <div className="rounded-lg bg-muted/50 border border-border p-3">
+                <div className="flex items-start gap-2 text-[10px] text-muted-foreground">
+                  <Shield className="h-3.5 w-3.5 mt-0.5 shrink-0 text-primary" />
+                  <p>
+                    This credential is stored on the blockchain and verified through smart contracts. 
+                    The credential hash links to your document metadata on IPFS, ensuring immutability and verifiability.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="flex justify-end mt-4">
+            <Button variant="outline" onClick={() => setCredentialPreviewOpen(false)}>
+              Close
+            </Button>
           </div>
         </DialogContent>
       </Dialog>
