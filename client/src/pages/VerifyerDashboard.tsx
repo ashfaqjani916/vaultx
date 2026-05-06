@@ -1,15 +1,15 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { QRCodeSVG } from 'qrcode.react'
-import { AlertCircle, CheckCircle2, Clock, Copy, FileBadge2, Hexagon, Loader2, LogOut, QrCode, ShieldCheck } from 'lucide-react'
+import { AlertCircle, CheckCircle2, Clock, Copy, Download, FileBadge2, Hexagon, Loader2, LogOut, QrCode, RefreshCw, ShieldCheck } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { StatusBadge } from '@/components/StatusBadge'
-import { useQueries } from '@tanstack/react-query'
+import { useQueries, useQueryClient } from '@tanstack/react-query'
 import { useActiveWallet, useDisconnect, useReadContract, useSendAndConfirmTransaction } from 'thirdweb/react'
 import { useOnchainUser } from '@/hooks/useOnchainUser'
 import { buildVerificationQrPayload, type VerificationQrPayload } from '@/lib/verificationQr'
@@ -55,8 +55,11 @@ export default function VerifyerDashboard() {
   const navigate = useNavigate()
   const activeWallet = useActiveWallet()
   const { disconnect } = useDisconnect()
-  const { account, did } = useOnchainUser()
+  const { account, did, user } = useOnchainUser()
+  const isApproved = Boolean(user?.isApproved)
   const { mutateAsync: sendAndConfirmTransactionAsync, isPending: isTxPending } = useSendAndConfirmTransaction()
+  const queryClient = useQueryClient()
+  const [isRefreshing, setIsRefreshing] = useState(false)
 
   const contract = useMemo(
     () =>
@@ -121,6 +124,7 @@ export default function VerifyerDashboard() {
   const [pendingPresentations, setPendingPresentations] = useState<PendingPresentation[]>([])
   const [fetchingRequests, setFetchingRequests] = useState(false)
   const [verifyingPresentationId, setVerifyingPresentationId] = useState<string | null>(null)
+  const qrCodeRef = useRef<HTMLDivElement>(null)
 
   const generatedClaimDetails = useMemo(() => {
     if (!generatedRequest) return []
@@ -421,6 +425,91 @@ export default function VerifyerDashboard() {
     return `${addr.slice(0, 6)}...${addr.slice(-4)}`
   }
 
+  const handleRefreshAll = async () => {
+    setIsRefreshing(true)
+    try {
+      // Invalidate all relevant queries to trigger refetch
+      await queryClient.invalidateQueries({ queryKey: ['verifier-claim'] })
+      await queryClient.invalidateQueries({ queryKey: ['thirdweb-contract'] })
+      
+      // Also fetch verifier requests
+      await fetchVerifierRequests()
+      
+      toast({ 
+        title: 'Refreshed',
+        description: 'All contract data has been refreshed'
+      })
+    } catch (error) {
+      toast({ 
+        title: 'Refresh failed',
+        description: error instanceof Error ? error.message : 'Failed to refresh data',
+        variant: 'destructive'
+      })
+    } finally {
+      setIsRefreshing(false)
+    }
+  }
+
+  const handleDownloadQR = () => {
+    if (!qrCodeRef.current || !generatedRequest) return
+
+    try {
+      const svg = qrCodeRef.current.querySelector('svg')
+      if (!svg) return
+
+      // Create a canvas
+      const canvas = document.createElement('canvas')
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return
+
+      // Set canvas size (add padding)
+      const padding = 40
+      const qrSize = 210
+      canvas.width = qrSize + padding * 2
+      canvas.height = qrSize + padding * 2
+
+      // Fill white background
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(0, 0, canvas.width, canvas.height)
+
+      // Convert SVG to image
+      const svgData = new XMLSerializer().serializeToString(svg)
+      const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' })
+      const url = URL.createObjectURL(svgBlob)
+
+      const img = new Image()
+      img.onload = () => {
+        ctx.drawImage(img, padding, padding, qrSize, qrSize)
+        URL.revokeObjectURL(url)
+
+        // Convert canvas to blob and download
+        canvas.toBlob((blob) => {
+          if (!blob) return
+          const downloadUrl = URL.createObjectURL(blob)
+          const link = document.createElement('a')
+          link.href = downloadUrl
+          link.download = `verification-qr-${generatedRequest.verificationRequestId}.png`
+          document.body.appendChild(link)
+          link.click()
+          document.body.removeChild(link)
+          URL.revokeObjectURL(downloadUrl)
+
+          toast({
+            title: 'QR Code Downloaded',
+            description: 'The QR code has been saved to your downloads',
+          })
+        }, 'image/png')
+      }
+      img.src = url
+    } catch (error) {
+      toast({
+        title: 'Download failed',
+        description: 'Failed to download QR code',
+        variant: 'destructive',
+      })
+    }
+  }
+
   if (!account) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
@@ -456,6 +545,17 @@ export default function VerifyerDashboard() {
               </button>
             </div>
           )}
+          <Button 
+            variant="outline" 
+            size="sm" 
+            onClick={handleRefreshAll} 
+            disabled={isRefreshing}
+            className="text-xs gap-1.5"
+            title="Refresh all contract data"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+            {isRefreshing ? 'Refreshing...' : 'Refresh'}
+          </Button>
           <Button variant="ghost" size="sm" onClick={handleSignOut} className="text-xs text-muted-foreground hover:text-foreground gap-1.5">
             <LogOut className="h-3.5 w-3.5" />
             Sign Out
@@ -470,6 +570,23 @@ export default function VerifyerDashboard() {
             <p className="text-sm text-muted-foreground mt-1">Select the credentials you want to verify, create an on-chain request, and generate a QR for the citizen dashboard to scan.</p>
           </motion.div>
 
+          {/* Approval Status Banner */}
+          {!isApproved ? (
+            <Card className="p-4 border-warning/40 bg-warning/5">
+              <div className="flex items-start gap-3">
+                <AlertCircle className="h-5 w-5 text-warning shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-semibold text-warning">Verifier Account Not Approved</p>
+                  <p className="text-xs text-warning/90 mt-1">
+                    Your account is not approved to verify citizen claims and identities. Verification actions are disabled until governance approves your account.
+                  </p>
+                </div>
+              </div>
+            </Card>
+          ) : (
+            <></>
+          )}
+
           <motion.div {...cardAnim(0)}>
             <Card className="p-6 shadow-card border-border bg-card">
               <div className="flex items-start justify-between gap-4 mb-4">
@@ -482,7 +599,7 @@ export default function VerifyerDashboard() {
 
               <div className="space-y-4">
                 <div className="flex items-center gap-2 flex-wrap">
-                  <Button onClick={() => void fetchVerifierRequests()} disabled={fetchingRequests} variant="outline" size="sm">
+                  <Button onClick={() => void fetchVerifierRequests()} disabled={fetchingRequests || !isApproved} variant="outline" size="sm">
                     {fetchingRequests ? (
                       <>
                         <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
@@ -521,7 +638,7 @@ export default function VerifyerDashboard() {
 
                         <Button
                           onClick={() => verifyPresentation(item.presentationId)}
-                          disabled={isTxPending || verifyingPresentationId !== null}
+                          disabled={isTxPending || verifyingPresentationId !== null || !isApproved}
                           className="w-full gradient-primary text-primary-foreground text-xs"
                         >
                           {verifyingPresentationId === item.presentationId ? (
@@ -578,7 +695,7 @@ export default function VerifyerDashboard() {
                       ) : (
                         definitions.map((claim) => (
                           <label key={claim.claimId} className="flex items-start gap-3 px-3 py-3 cursor-pointer hover:bg-muted/30 transition-colors">
-                            <Checkbox checked={selectedClaimIds.includes(claim.claimId)} onCheckedChange={() => toggleClaimSelection(claim.claimId)} disabled={claim.status !== 1} className="mt-0.5" />
+                            <Checkbox checked={selectedClaimIds.includes(claim.claimId)} onCheckedChange={() => toggleClaimSelection(claim.claimId)} disabled={claim.status !== 1 || !isApproved} className="mt-0.5" />
                             <div className="min-w-0">
                               <p className="text-sm font-medium text-card-foreground">{claim.claimType}</p>
                               <p className="text-[11px] text-muted-foreground font-mono break-all">{claim.claimId}</p>
@@ -593,10 +710,10 @@ export default function VerifyerDashboard() {
 
                   <div>
                     <Label className="text-xs">Expiry (hours)</Label>
-                    <Input value={expiryHours} onChange={(e) => setExpiryHours(e.target.value)} type="number" min={1} className="mt-1" />
+                    <Input value={expiryHours} onChange={(e) => setExpiryHours(e.target.value)} type="number" min={1} className="mt-1" disabled={!isApproved} />
                   </div>
 
-                  <Button onClick={createVerificationRequest} disabled={creatingRequest || isTxPending || selectedClaimIds.length === 0} className="w-full gradient-primary text-primary-foreground">
+                  <Button onClick={createVerificationRequest} disabled={creatingRequest || isTxPending || selectedClaimIds.length === 0 || !isApproved} className="w-full gradient-primary text-primary-foreground">
                     {creatingRequest || isTxPending ? (
                       <>
                         <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
@@ -632,9 +749,19 @@ export default function VerifyerDashboard() {
 
                 {generatedRequest ? (
                   <div className="space-y-4">
-                    <div className="bg-background rounded-md border border-border p-4 flex justify-center">
+                    <div className="bg-background rounded-md border border-border p-4 flex justify-center" ref={qrCodeRef}>
                       <QRCodeSVG value={buildVerificationQrPayload(generatedRequest)} size={210} />
                     </div>
+
+                    <Button
+                      onClick={handleDownloadQR}
+                      variant="outline"
+                      className="w-full"
+                      size="sm"
+                    >
+                      <Download className="h-4 w-4 mr-1.5" />
+                      Download QR Code
+                    </Button>
 
                     <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-3">
                       <div>
