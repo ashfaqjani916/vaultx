@@ -584,17 +584,7 @@ export default function VerifyerDashboard() {
               </div>
             </Card>
           ) : (
-            <Card className="p-4 border-success/40 bg-success/5">
-              <div className="flex items-start gap-3">
-                <CheckCircle2 className="h-5 w-5 text-success shrink-0 mt-0.5" />
-                <div>
-                  <p className="text-sm font-semibold text-success">Verifier Account Approved</p>
-                  <p className="text-xs text-success/90 mt-1">
-                    Your account is approved to verify citizen claims and identities. You can create verification requests and verify presentations.
-                  </p>
-                </div>
-              </div>
-            </Card>
+            <></>
           )}
 
           <motion.div {...cardAnim(0)}>
