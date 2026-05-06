@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import { QRCodeSVG } from 'qrcode.react'
-import { AlertCircle, CheckCircle2, Clock, FileBadge2, Hexagon, Loader2, LogOut, QrCode, ShieldCheck } from 'lucide-react'
+import { AlertCircle, CheckCircle2, Clock, Copy, FileBadge2, Hexagon, Loader2, LogOut, QrCode, ShieldCheck } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -55,7 +55,7 @@ export default function VerifyerDashboard() {
   const navigate = useNavigate()
   const activeWallet = useActiveWallet()
   const { disconnect } = useDisconnect()
-  const { did } = useOnchainUser()
+  const { account, did } = useOnchainUser()
   const { mutateAsync: sendAndConfirmTransactionAsync, isPending: isTxPending } = useSendAndConfirmTransaction()
 
   const contract = useMemo(
@@ -110,7 +110,6 @@ export default function VerifyerDashboard() {
   const claimsLoading = isClaimIdsPending || claimQueries.some((query) => query.isPending || query.isFetching)
 
   const claimById = useMemo(() => new Map(definitions.map((claim) => [claim.claimId, claim])), [definitions])
-
   const [selectedClaimIds, setSelectedClaimIds] = useState<string[]>([])
   const [expiryHours, setExpiryHours] = useState('24')
   const [creatingRequest, setCreatingRequest] = useState(false)
@@ -408,6 +407,32 @@ export default function VerifyerDashboard() {
     }
   }
 
+  const handleCopyAddress = async () => {
+    if (!account?.address) return
+    try {
+      await navigator.clipboard.writeText(account.address)
+      toast({ title: 'Address copied' })
+    } catch {
+      toast({ title: 'Unable to copy address', variant: 'destructive' })
+    }
+  }
+
+  function shortAddress(addr: string) {
+    return `${addr.slice(0, 6)}...${addr.slice(-4)}`
+  }
+
+  if (!account) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <Card className="p-8 text-center max-w-md">
+          <Hexagon className="h-10 w-10 text-primary mx-auto mb-3" />
+          <p className="text-sm font-medium mb-2">Wallet not connected</p>
+          <Button className="gradient-primary text-primary-foreground" onClick={() => navigate('/', { replace: true })}>Connect Wallet</Button>
+        </Card>
+      </div>
+    )
+  }
+
   return (
     <div className="min-h-screen bg-background flex flex-col">
       <nav className="sticky top-0 z-10 flex items-center justify-between px-6 py-4 border-b border-border bg-card/80 backdrop-blur-sm">
@@ -418,10 +443,24 @@ export default function VerifyerDashboard() {
           <span className="text-lg font-bold tracking-tight">VaultX</span>
           <span className="text-[11px] bg-primary/10 text-primary px-2 py-0.5 rounded-full font-semibold ml-1 tracking-wide">VERIFYER</span>
         </div>
-        <Button variant="ghost" size="sm" onClick={handleSignOut} className="text-xs text-muted-foreground hover:text-foreground gap-1.5">
-          <LogOut className="h-3.5 w-3.5" />
-          Sign Out
-        </Button>
+        <div className="flex items-center gap-3">
+          {account && (
+            <div className="flex items-center gap-2 text-xs font-mono text-muted-foreground bg-muted px-3 py-1.5 rounded-lg">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
+              </span>
+              {shortAddress(account.address)}
+              <button type="button" onClick={handleCopyAddress} className="text-muted-foreground hover:text-foreground transition-colors" aria-label="Copy address" title="Copy address">
+                <Copy className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
+          <Button variant="ghost" size="sm" onClick={handleSignOut} className="text-xs text-muted-foreground hover:text-foreground gap-1.5">
+            <LogOut className="h-3.5 w-3.5" />
+            Sign Out
+          </Button>
+        </div>
       </nav>
 
       <div className="flex-1 p-6">

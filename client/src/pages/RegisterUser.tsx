@@ -163,7 +163,7 @@ export default function RegisterUser() {
       const roleRoutes: Record<OnchainUserRole, string> = {
         governance: '/governance',
         approver: '/dashboard/approver',
-        verifier: '/dashboard/verifyer',
+        verifier: '/dashboard/verifier',
         citizen: '/dashboard/citizen',
       }
       navigate(roleRoutes[form.role], { replace: true })
@@ -292,7 +292,6 @@ export default function RegisterUser() {
               </motion.div>
             )}
           </form>
-
         </Card>
       </motion.div>
     </div>

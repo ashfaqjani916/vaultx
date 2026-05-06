@@ -4,7 +4,7 @@ import { useQueries, useQueryClient } from '@tanstack/react-query'
 import { useActiveAccount, useActiveWallet, useDisconnect, useReadContract, useSendAndConfirmTransaction } from 'thirdweb/react'
 import { getContract, prepareContractCall, readContract } from 'thirdweb'
 import { motion } from 'framer-motion'
-import { Hexagon, LogOut, Plus, CheckCircle2, XCircle, Loader2, FileText, RefreshCw, ShieldCheck, ClipboardList, AlertTriangle, Inbox, Send, UserPlus, Users, UserCheck } from 'lucide-react'
+import { Hexagon, LogOut, Plus, CheckCircle2, XCircle, Loader2, FileText, RefreshCw, ShieldCheck, ClipboardList, AlertTriangle, Inbox, Send, UserPlus, Users, UserCheck, Copy } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -536,6 +536,16 @@ export default function Governance() {
     navigate('/', { replace: true })
   }
 
+  const handleCopyAddress = async () => {
+    if (!account?.address) return
+    try {
+      await navigator.clipboard.writeText(account.address)
+      toast({ title: 'Address copied' })
+    } catch {
+      toast({ title: 'Unable to copy address', variant: 'destructive' })
+    }
+  }
+
   // ── Shared claim table renderer ──────────────────────────────────────────
   const renderClaimTable = (claims: ClaimRow[], showActions = false) => (
     <Card className="shadow-card border-border bg-card overflow-hidden">
@@ -662,6 +672,9 @@ export default function Governance() {
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
               </span>
               {shortAddress(account.address)}
+              <button type="button" onClick={handleCopyAddress} className="text-muted-foreground hover:text-foreground transition-colors" aria-label="Copy address" title="Copy address">
+                <Copy className="h-3.5 w-3.5" />
+              </button>
             </div>
           )}
           <Button variant="ghost" size="sm" onClick={handleDisconnect} className="text-xs text-muted-foreground hover:text-foreground gap-1.5">
@@ -716,7 +729,7 @@ export default function Governance() {
                           { key: 'documentRequired', label: 'Document' },
                           { key: 'photoRequired', label: 'Photo' },
                           { key: 'geoRequired', label: 'Geolocation' },
-                          { key: 'biometricRequired', label: 'Biometric' },
+                          // { key: 'biometricRequired', label: 'Biometric' },
                         ].map(({ key, label }) => (
                           <div key={key} className="flex items-center gap-2.5">
                             <Switch checked={form[key as keyof typeof form] as boolean} onCheckedChange={(v) => setForm((f) => ({ ...f, [key]: v }))} />

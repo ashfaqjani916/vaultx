@@ -1,11 +1,12 @@
 /** @type import("hardhat/config").HardhatUserConfig */
 module.exports = {
   solidity: {
-    version: "0.8.19",
+    version: "0.8.26",
     settings: {
+      evmVersion: "cancun",
       optimizer: {
         enabled: true,
-        runs: 200
+        runs: 5
       },
       viaIR: true,
       metadata: {

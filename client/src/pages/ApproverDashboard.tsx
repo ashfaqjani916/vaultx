@@ -4,7 +4,7 @@ import { useQueries, useQueryClient } from '@tanstack/react-query'
 import { useActiveAccount, useActiveWallet, useDisconnect, useSendAndConfirmTransaction } from 'thirdweb/react'
 import { getContract, prepareContractCall, readContract } from 'thirdweb'
 import { motion } from 'framer-motion'
-import { Hexagon, CheckCircle2, XCircle, Loader2, FileText, FileImage, File, Eye, ExternalLink, ClipboardList, Clock, LogOut, Shield, AlertTriangle } from 'lucide-react'
+import { Hexagon, CheckCircle2, XCircle, Loader2, FileText, FileImage, File, Eye, ExternalLink, ClipboardList, Clock, LogOut, Shield, AlertTriangle, Copy } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -25,6 +25,10 @@ function DocIcon({ name }: { name: string }) {
   if (['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(ext)) return <FileImage className="h-4 w-4 text-blue-400" />
   if (ext === 'pdf') return <FileText className="h-4 w-4 text-red-400" />
   return <File className="h-4 w-4 text-muted-foreground" />
+}
+
+function shortAddress(addr: string) {
+  return `${addr.slice(0, 6)}...${addr.slice(-4)}`
 }
 
 const cardAnim = (i: number) => ({
@@ -75,6 +79,16 @@ export default function ApproverDashboard() {
   const handleSignOut = () => {
     if (activeWallet) disconnect(activeWallet)
     navigate('/', { replace: true })
+  }
+
+  const handleCopyAddress = async () => {
+    if (!account?.address) return
+    try {
+      await navigator.clipboard.writeText(account.address)
+      toast({ title: 'Address copied' })
+    } catch {
+      toast({ title: 'Unable to copy address', variant: 'destructive' })
+    }
   }
 
   const contract = getContract({
@@ -214,6 +228,7 @@ export default function ApproverDashboard() {
   const [ipfsDataByHash, setIpfsDataByHash] = useState<Record<string, unknown>>({})
   const [loadingIpfs, setLoadingIpfs] = useState(false)
   const [acting, setActing] = useState<Record<string, 'approving' | 'rejecting'>>({})
+  const [openingAssets, setOpeningAssets] = useState<Record<string, boolean>>({})
 
   const getRequestAssets = (req: SsiClaimRequest): RequestAsset[] =>
     REQUEST_ASSET_KEYS.map(({ label, key }) => ({
@@ -250,6 +265,33 @@ export default function ApproverDashboard() {
       console.error('Failed to fetch IPFS metadata:', err)
     } finally {
       setLoadingIpfs(false)
+    }
+  }
+
+  const openAssetFile = async (asset: RequestAsset, assetId: string) => {
+    setOpeningAssets((p) => ({ ...p, [assetId]: true }))
+    const tab = window.open('about:blank', '_blank')
+
+    try {
+      const loaded = ipfsDataByHash[asset.hash] ?? (await fetchFromIPFS(asset.hash))
+      setIpfsDataByHash((p) => ({ ...p, [asset.hash]: loaded }))
+
+      const url = isIPFSMetadata(loaded) ? getIPFSUrl(loaded.fileCid) : getIPFSUrl(asset.hash)
+      if (tab) {
+        tab.opener = null
+        tab.location.href = url
+      } else {
+        window.open(url, '_blank', 'noopener,noreferrer')
+      }
+    } catch {
+      tab?.close()
+      toast({ title: 'Unable to open file', variant: 'destructive' })
+    } finally {
+      setOpeningAssets((p) => {
+        const n = { ...p }
+        delete n[assetId]
+        return n
+      })
     }
   }
 
@@ -467,10 +509,22 @@ export default function ApproverDashboard() {
           <span className="text-lg font-bold tracking-tight">VaultX</span>
           <span className="text-[11px] bg-warning/15 text-warning px-2 py-0.5 rounded-full font-semibold ml-1 tracking-wide">APPROVER</span>
         </div>
-        <Button variant="ghost" size="sm" onClick={handleSignOut} className="text-xs text-muted-foreground hover:text-foreground gap-1.5">
-          <LogOut className="h-3.5 w-3.5" />
-          Sign Out
-        </Button>
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 text-xs font-mono text-muted-foreground bg-muted px-3 py-1.5 rounded-lg">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
+            </span>
+            {shortAddress(account.address)}
+            <button type="button" onClick={handleCopyAddress} className="text-muted-foreground hover:text-foreground transition-colors" aria-label="Copy address" title="Copy address">
+              <Copy className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <Button variant="ghost" size="sm" onClick={handleSignOut} className="text-xs text-muted-foreground hover:text-foreground gap-1.5">
+            <LogOut className="h-3.5 w-3.5" />
+            Sign Out
+          </Button>
+        </div>
       </nav>
 
       {/* ── Content ── */}
@@ -562,20 +616,21 @@ export default function ApproverDashboard() {
                           {/* IPFS document link */}
                           {getRequestAssets(req).length > 0 && (
                             <div className="mb-4 space-y-2">
-                              {getRequestAssets(req).map((asset) => (
-                                <div key={asset.key} className="px-3 py-2 rounded-lg bg-muted/50 border border-border flex items-center gap-2">
-                                  <FileText className="h-4 w-4 text-primary shrink-0" />
-                                  <div className="flex-1 min-w-0">
-                                    <p className="text-xs font-medium">IPFS {asset.label}</p>
-                                    <code className="text-[10px] text-muted-foreground font-mono truncate block">{asset.hash}</code>
-                                  </div>
-                                  <a href={getIPFSUrl(asset.hash)} target="_blank" rel="noopener noreferrer">
-                                    <Button variant="ghost" size="sm" className="h-6 w-6 p-0">
-                                      <ExternalLink className="h-3 w-3" />
+                              {getRequestAssets(req).map((asset) => {
+                                const assetId = `${req.requestId}:${asset.key}`
+                                return (
+                                  <div key={asset.key} className="px-3 py-2 rounded-lg bg-muted/50 border border-border flex items-center gap-2">
+                                    <FileText className="h-4 w-4 text-primary shrink-0" />
+                                    <div className="flex-1 min-w-0">
+                                      <p className="text-xs font-medium">IPFS {asset.label}</p>
+                                      <code className="text-[10px] text-muted-foreground font-mono truncate block">{asset.hash}</code>
+                                    </div>
+                                    <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => openAssetFile(asset, assetId)} disabled={openingAssets[assetId]}>
+                                      {openingAssets[assetId] ? <Loader2 className="h-3 w-3 animate-spin" /> : <ExternalLink className="h-3 w-3" />}
                                     </Button>
-                                  </a>
-                                </div>
-                              ))}
+                                  </div>
+                                )
+                              })}
                             </div>
                           )}
 

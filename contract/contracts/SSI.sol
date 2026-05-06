@@ -136,7 +136,6 @@ contract SSI {
         uint256 issuedAt;
         uint256 expiresAt;
         uint256 revokedAt;
-        // string[] signatures;
         bytes[] signatures;
     }
 
@@ -146,16 +145,6 @@ contract SSI {
         string reason;
         uint256 revokedAt;
     }
-
-    // struct VerificationRequest {
-    //     string verificationRequestId;
-    //     string verifierDid;
-    //     string citizenDid;
-    //     string[] requestedClaims;
-    //     VerificationStatus status;
-    //     uint256 createdAt;
-    //     uint256 expiresAt;
-    // }
 
     struct VerificationRequest {
         string verificationRequestId;
@@ -169,18 +158,6 @@ contract SSI {
         string presentationId;
         bool fulfilled;
     }
-
-    // struct VerifiablePresentation {
-    //     string presentationId;
-    //     string verificationRequestId;
-    //     string citizenDid;
-    //     string verifierDid;
-    //     string[] credentialIds;
-    //     string proof;
-    //     string nonce;
-    //     uint256 createdAt;
-    //     uint256 expiresAt;
-    // }
 
     struct VerifiablePresentation {
         string presentationId;
@@ -206,8 +183,6 @@ contract SSI {
     mapping(string => VerificationRequest) public verificationRequests;
     mapping(string => VerifiablePresentation) public presentations;
 
-    // mapping(string => Approval[]) public claimApprovals;
-
     mapping(string => Verification[]) public verifications;
     mapping(string => Credential[]) public citizenCredentials;
 
@@ -216,17 +191,14 @@ contract SSI {
 
     mapping(string => UserRequest) public userRequests;
 
-    // Track all approver addresses for governance to query
     address[] public approverAddresses;
 
-    // Track all claim IDs for governance to query
+    address[] public allUserAddresses;
     string[] public allClaimIds;
 
-    // Track all claim request IDs
     string[] public allRequestIds;
 
     modifier onlyGovernance() {
-        // Step 1: allow owner always
         if (msg.sender == owner) {
             _;
             return;
@@ -262,7 +234,8 @@ contract SSI {
 
         userAddressToDId[msg.sender] = did;
 
-        // Track approver addresses for governance queries
+        allUserAddresses.push(msg.sender);
+
         if (role == Role.APPROVER) {
             approverAddresses.push(msg.sender);
         }
@@ -316,10 +289,6 @@ contract SSI {
         req.processed = true;
         req.approved = false;
         req.processedAt = block.timestamp;
-    }
-
-    function getUserByDID(string memory did) public view returns (User memory) {
-        return users[did];
     }
 
     function getUser(
@@ -554,28 +523,22 @@ contract SSI {
 
         require(bytes(req.requestId).length != 0, "Invalid request");
 
-        // Expiry check
         if (block.timestamp >= req.expiresAt) {
             req.status = ClaimRequestStatus.EXPIRED;
             revert("Request expired");
         }
 
-        // Create message hash
         bytes32 hash = getMessageHash(requestId, req.claimId, req.citizenDid);
 
-        // Recover signer
         address signer = recoverSigner(hash, signature);
         require(msg.sender == signer, "Sender must be signer");
 
-        // Get DID of signer
         string memory signerDid = userAddressToDId[signer];
         User memory user = users[signerDid];
 
-        // Validate signer
         require(user.active, "User inactive");
         require(user.role == Role.APPROVER, "Not approver");
 
-        // Check if signer is assigned to this request
         bool isValidApprover = false;
         for (uint i = 0; i < req.approverDids.length; i++) {
             if (
@@ -588,16 +551,13 @@ contract SSI {
         }
         require(isValidApprover, "Not assigned approver");
 
-        // Prevent duplicate signing
         require(!hasSigned[requestId][signer], "Already signed");
 
-        // Store signature
         hasSigned[requestId][signer] = true;
         requestSignatures[requestId].push(signature);
 
         req.updatedAt = block.timestamp;
 
-        // Threshold check
         uint256 required = claims[req.claimId].numberOfApprovalsNeeded;
 
         if (requestSignatures[requestId].length >= required) {
@@ -621,7 +581,6 @@ contract SSI {
 
         require(bytes(req.requestId).length != 0, "Invalid request");
 
-        // Only assigned approver can reject
         string memory signerDid = userAddressToDId[msg.sender];
         User memory user = users[signerDid];
 
@@ -854,10 +813,12 @@ contract SSI {
         return true;
     }
 
-    // ── Governance helpers ─────────────────────────────────────────────────
-
     function getApproverAddresses() public view returns (address[] memory) {
         return approverAddresses;
+    }
+
+    function getAllUserAddresses() public view returns (address[] memory) {
+        return allUserAddresses;
     }
 
     function getAllRequestIds() public view returns (string[] memory) {
@@ -887,8 +848,6 @@ contract SSI {
         req.status = ClaimRequestStatus.IN_REVIEW;
         req.updatedAt = block.timestamp;
     }
-
-    // ── Internal helpers ─────────────────────────────────────────────────
 
     function _issueCredentialForRequest(
         ClaimRequest storage req,

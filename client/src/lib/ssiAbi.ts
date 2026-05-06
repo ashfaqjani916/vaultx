@@ -525,6 +525,11 @@ export const ssiAbi = [
             "type": "uint256"
           },
           {
+            "internalType": "string",
+            "name": "presentationId",
+            "type": "string"
+          },
+          {
             "internalType": "bool",
             "name": "fulfilled",
             "type": "bool"
@@ -1058,6 +1063,11 @@ export const ssiAbi = [
     "inputs": [
       {
         "internalType": "string",
+        "name": "presentationId",
+        "type": "string"
+      },
+      {
+        "internalType": "string",
         "name": "verificationRequestId",
         "type": "string"
       },
@@ -1069,6 +1079,11 @@ export const ssiAbi = [
       {
         "internalType": "string",
         "name": "citizenDid",
+        "type": "string"
+      },
+      {
+        "internalType": "string",
+        "name": "verifierDid",
         "type": "string"
       },
       {
@@ -1143,87 +1158,6 @@ export const ssiAbi = [
     "inputs": [
       {
         "internalType": "string",
-        "name": "did",
-        "type": "string"
-      }
-    ],
-    "name": "getUserByDID",
-    "outputs": [
-      {
-        "components": [
-          {
-            "internalType": "string",
-            "name": "did",
-            "type": "string"
-          },
-          {
-            "internalType": "string",
-            "name": "signingPublicKey",
-            "type": "string"
-          },
-          {
-            "internalType": "string",
-            "name": "encryptionPublicKey",
-            "type": "string"
-          },
-          {
-            "internalType": "address",
-            "name": "wallet",
-            "type": "address"
-          },
-          {
-            "internalType": "enum SSI.Role",
-            "name": "role",
-            "type": "uint8"
-          },
-          {
-            "internalType": "bool",
-            "name": "active",
-            "type": "bool"
-          },
-          {
-            "internalType": "bool",
-            "name": "isApproved",
-            "type": "bool"
-          },
-          {
-            "internalType": "uint256",
-            "name": "createdAt",
-            "type": "uint256"
-          },
-          {
-            "internalType": "uint256",
-            "name": "updatedAt",
-            "type": "uint256"
-          },
-          {
-            "internalType": "uint256",
-            "name": "revokedAt",
-            "type": "uint256"
-          },
-          {
-            "internalType": "string",
-            "name": "createdByDid",
-            "type": "string"
-          },
-          {
-            "internalType": "string",
-            "name": "revokedByDid",
-            "type": "string"
-          }
-        ],
-        "internalType": "struct SSI.User",
-        "name": "",
-        "type": "tuple"
-      }
-    ],
-    "stateMutability": "view",
-    "type": "function"
-  },
-  {
-    "inputs": [
-      {
-        "internalType": "string",
         "name": "requestId",
         "type": "string"
       }
@@ -1271,6 +1205,11 @@ export const ssiAbi = [
             "internalType": "uint256",
             "name": "expiresAt",
             "type": "uint256"
+          },
+          {
+            "internalType": "string",
+            "name": "presentationId",
+            "type": "string"
           },
           {
             "internalType": "bool",
@@ -2104,6 +2043,11 @@ export const ssiAbi = [
         "type": "uint256"
       },
       {
+        "internalType": "string",
+        "name": "presentationId",
+        "type": "string"
+      },
+      {
         "internalType": "bool",
         "name": "fulfilled",
         "type": "bool"
@@ -2180,4 +2124,4 @@ export const ssiAbi = [
     "stateMutability": "nonpayable",
     "type": "function"
   }
-] as const;
+]
