@@ -241,6 +241,15 @@ export default function CitizenDashboard() {
   const myRequests = useMemo(() => requests.filter((r) => r.citizenDid === did), [requests, did])
   const activeCredentials = useMemo(() => credentials.filter((c) => c.status === 0), [credentials])
   const activeCredentialClaimIds = useMemo(() => new Set(activeCredentials.map((credential) => credential.claimId)), [activeCredentials])
+  
+  // Track claim IDs with pending/in-review/approved requests (not yet issued or rejected)
+  const pendingRequestClaimIds = useMemo(() => {
+    return new Set(
+      myRequests
+        .filter((r) => r.status >= 0 && r.status <= 2) // pending, in_review, or approved
+        .map((r) => r.claimId)
+    )
+  }, [myRequests])
 
   const [qrPayloadInput, setQrPayloadInput] = useState('')
   const [decodedQrPayload, setDecodedQrPayload] = useState<VerificationQrPayload | null>(null)
@@ -1308,7 +1317,7 @@ export default function CitizenDashboard() {
             </div>
             <Button onClick={() => setUploadOpen(true)} disabled={!isApproved} className="gradient-primary text-primary-foreground text-sm font-semibold shrink-0">
               <Plus className="h-4 w-4 mr-1.5" />
-              Upload Document
+              Request Claim/Indentity
             </Button>
           </motion.div>
 
@@ -1756,11 +1765,26 @@ export default function CitizenDashboard() {
                     <SelectValue placeholder={availableDefs.length ? 'Select claim type...' : 'No claim types'} />
                   </SelectTrigger>
                   <SelectContent>
-                    {availableDefs.map((d) => (
-                      <SelectItem key={d.id} value={d.id}>
-                        {d.name}
-                      </SelectItem>
-                    ))}
+                    {availableDefs.map((d) => {
+                      const alreadyClaimed = activeCredentialClaimIds.has(d.id)
+                      const hasPendingRequest = pendingRequestClaimIds.has(d.id)
+                      const isDisabled = alreadyClaimed || hasPendingRequest
+                      const disabledReason = alreadyClaimed 
+                        ? ' (Already claimed)' 
+                        : hasPendingRequest 
+                          ? ' (Request pending)' 
+                          : ''
+                      
+                      return (
+                        <SelectItem 
+                          key={d.id} 
+                          value={d.id}
+                          disabled={isDisabled}
+                        >
+                          {d.name}{disabledReason}
+                        </SelectItem>
+                      )
+                    })}
                   </SelectContent>
                 </Select>
               )}
