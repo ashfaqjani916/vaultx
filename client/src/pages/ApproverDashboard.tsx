@@ -71,7 +71,7 @@ export default function ApproverDashboard() {
   const account = useActiveAccount()
   const activeWallet = useActiveWallet()
   const { disconnect } = useDisconnect()
-  const { did, isRegistered, role } = useOnchainUser()
+  const { did, isRegistered, role, user } = useOnchainUser()
   const { writeByName, isPending } = useSSIWrite()
   const { mutateAsync: sendAndConfirmTransactionAsync } = useSendAndConfirmTransaction()
   const queryClient = useQueryClient()
@@ -485,6 +485,7 @@ export default function ApproverDashboard() {
 
   const isRequestsLoading = requestQueries.some((q) => q.isLoading)
   const isSignedStatusLoading = hasSignedQueries.some((q) => q.isLoading)
+  const approvalRequired = Boolean(user && !user.isApproved)
 
   if (!account) {
     return (
@@ -535,6 +536,13 @@ export default function ApproverDashboard() {
             <h1 className="text-2xl font-bold tracking-tight">Review Queue</h1>
             <p className="text-sm text-muted-foreground mt-0.5">Verify documents submitted by citizens. You have been assigned by governance.</p>
           </motion.div>
+
+          {approvalRequired && (
+            <Card className="p-4 border-warning/40 bg-warning/5 text-sm text-warning flex items-start gap-2">
+              <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+              <span>Approval is required before you can review assigned requests.</span>
+            </Card>
+          )}
 
           {/* Stats */}
           <div className="grid grid-cols-3 gap-4">

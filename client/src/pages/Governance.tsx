@@ -49,6 +49,10 @@ function shortAddress(addr: string) {
   return `${addr.slice(0, 6)}...${addr.slice(-4)}`
 }
 
+function normalizeClaimType(value: string) {
+  return value.trim().replace(/\s+/g, ' ').toLowerCase()
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 export type ClaimRow = {
   id: string
@@ -341,6 +345,11 @@ export default function Governance() {
   const activeClaims = allClaims.filter((c) => c.status === 1)
   const rejectedClaims = allClaims.filter((c) => c.status === 2 || c.status === 3)
   const isLoading = claimQueries.some((q) => q.isLoading)
+  const duplicateClaimType = useMemo(() => {
+    const nextName = normalizeClaimType(form.name)
+    if (!nextName) return false
+    return allClaims.some((claim) => normalizeClaimType(claim.name) === nextName)
+  }, [allClaims, form.name])
 
   const governanceDid = account ? `did:ssi:${account.address.toLowerCase()}` : ''
 
@@ -404,6 +413,10 @@ export default function Governance() {
   // ── Actions ─────────────────────────────────────────────────────────────
   const handleCreate = async () => {
     if (!account || !form.name.trim()) return
+    if (duplicateClaimType) {
+      toast({ title: 'Claim type already exists', variant: 'destructive' })
+      return
+    }
     setCreating(true)
     const claimId = `claim-${Date.now()}`
     try {
@@ -715,6 +728,7 @@ export default function Governance() {
                     <div>
                       <Label className="text-xs">Claim Type *</Label>
                       <Input className="mt-1" value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} placeholder="e.g. Aadhaar Card" />
+                      {duplicateClaimType && <p className="text-xs text-destructive mt-1.5">A claim with this type already exists.</p>}
                     </div>
 
                     <div>
@@ -755,7 +769,7 @@ export default function Governance() {
                       />
                     </div>
 
-                    <Button onClick={handleCreate} disabled={creating || isPending || !form.name.trim()} className="w-full gradient-primary text-primary-foreground">
+                    <Button onClick={handleCreate} disabled={creating || isPending || !form.name.trim() || duplicateClaimType} className="w-full gradient-primary text-primary-foreground">
                       {creating || isPending ? (
                         <>
                           <Loader2 className="h-4 w-4 mr-2 animate-spin" />
