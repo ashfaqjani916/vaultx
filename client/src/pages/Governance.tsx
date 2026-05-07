@@ -4,7 +4,7 @@ import { useQueries, useQueryClient } from '@tanstack/react-query'
 import { useActiveAccount, useActiveWallet, useDisconnect, useReadContract, useSendAndConfirmTransaction } from 'thirdweb/react'
 import { getContract, prepareContractCall, readContract } from 'thirdweb'
 import { motion } from 'framer-motion'
-import { Hexagon, LogOut, Plus, CheckCircle2, XCircle, Loader2, FileText, RefreshCw, ShieldCheck, ClipboardList, AlertTriangle, Inbox, Send, UserPlus, Users, UserCheck, Copy } from 'lucide-react'
+import { Hexagon, LogOut, Plus, CheckCircle2, XCircle, Loader2, FileText, RefreshCw, ShieldCheck, ClipboardList, AlertTriangle, Inbox, Send, UserPlus, Users, UserCheck, Copy, Eye } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -93,6 +93,13 @@ const defaultForm = {
   biometricRequired: false,
   approvalsNeeded: 1,
 }
+
+const REQUEST_ASSET_KEYS = [
+  { key: 'documentHash', label: 'Document Hash' },
+  { key: 'photoHash', label: 'Photo Hash' },
+  { key: 'geolocationHash', label: 'Geolocation Hash' },
+  { key: 'biometricHash', label: 'Biometric Hash' },
+] as const
 
 // ── Component ─────────────────────────────────────────────────────────────────
 export default function Governance() {
@@ -363,6 +370,7 @@ export default function Governance() {
   const [selectedApprover, setSelectedApprover] = useState('')
   const [approverSearch, setApproverSearch] = useState('')
   const [assigning, setAssigning] = useState(false)
+  const [previewRequest, setPreviewRequest] = useState<SsiClaimRequest | null>(null)
 
   const selectedRequest = useMemo(() => allRequests.find((r) => r.requestId === assigningRequestId), [allRequests, assigningRequestId])
   const selectedRequestClaim = useMemo(() => allClaims.find((c) => c.id === selectedRequest?.claimId), [allClaims, selectedRequest])
@@ -382,6 +390,10 @@ export default function Governance() {
     setSelectedApprover('')
     setApproverSearch('')
     setAssignOpen(true)
+  }
+
+  const openRequestPreview = (request: SsiClaimRequest) => {
+    setPreviewRequest(request)
   }
 
   const toggleApprover = (did: string) => {
@@ -1048,13 +1060,27 @@ export default function Governance() {
                             <StatusBadge status={claimRequestStatusLabel(r.status)} />
                           </TableCell>
                           <TableCell className="text-right">
-                            {showAssignButton && (
-                              <Button size="sm" className="h-7 text-xs gap-1" variant="outline" onClick={() => openAssignModal(r.requestId)}>
-                                <UserPlus className="h-3 w-3" />
-                                Assign ({assignedCount}/{requiredCount || '?'})
-                              </Button>
-                            )}
-                            {!showAssignButton && <span className="text-xs text-muted-foreground">{assignedCount} assigned</span>}
+                            <div className="flex items-center justify-end gap-1.5">
+                              {showAssignButton && (
+                                <Button size="sm" className="h-7 text-xs gap-1" variant="outline" onClick={() => openAssignModal(r.requestId)}>
+                                  <UserPlus className="h-3 w-3" />
+                                  Assign ({assignedCount}/{requiredCount || '?'})
+                                </Button>
+                              )}
+                              {!showAssignButton && <span className="text-xs text-muted-foreground">{assignedCount} assigned</span>}
+                              {r.status === 3 && (
+                                <Button
+                                  size="icon"
+                                  variant="ghost"
+                                  className="h-7 w-7 text-muted-foreground hover:text-primary hover:bg-primary/10"
+                                  onClick={() => openRequestPreview(r)}
+                                  aria-label={`Preview issued request ${r.requestId}`}
+                                  title="Preview issued request"
+                                >
+                                  <Eye className="h-3.5 w-3.5" />
+                                </Button>
+                              )}
+                            </div>
                           </TableCell>
                         </TableRow>
                       )
@@ -1162,6 +1188,102 @@ export default function Governance() {
               </Button>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Issued Request Preview Modal ── */}
+      <Dialog open={Boolean(previewRequest)} onOpenChange={(o) => !o && setPreviewRequest(null)}>
+        <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Eye className="h-4 w-4 text-primary" />
+              Issued Request Preview
+            </DialogTitle>
+            <DialogDescription>View citizen upload details, assigned reviewers, and recorded hashes.</DialogDescription>
+          </DialogHeader>
+
+          {previewRequest && (
+            <div className="space-y-4 mt-2">
+              <div className="rounded-lg bg-muted/50 border border-border p-4 space-y-3">
+                <p className="text-xs font-semibold text-primary">Citizen Uploaded Details</p>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Request ID</p>
+                    <code className="text-xs font-mono break-all">{previewRequest.requestId}</code>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Claim Type</p>
+                    <p className="text-xs font-medium">{allClaims.find((c) => c.id === previewRequest.claimId)?.name || previewRequest.claimId}</p>
+                  </div>
+                  <div className="sm:col-span-2">
+                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Citizen DID</p>
+                    <code className="text-xs font-mono break-all">{previewRequest.citizenDid || '—'}</code>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Status</p>
+                    <div className="mt-1">
+                      <StatusBadge status={claimRequestStatusLabel(previewRequest.status)} />
+                    </div>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Submitted</p>
+                    <p className="text-xs text-muted-foreground">{previewRequest.createdAt > 0n ? new Date(Number(previewRequest.createdAt) * 1000).toLocaleString() : '—'}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Last Updated</p>
+                    <p className="text-xs text-muted-foreground">{previewRequest.updatedAt > 0n ? new Date(Number(previewRequest.updatedAt) * 1000).toLocaleString() : '—'}</p>
+                  </div>
+                  <div>
+                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Expires</p>
+                    <p className="text-xs text-muted-foreground">{previewRequest.expiresAt > 0n ? new Date(Number(previewRequest.expiresAt) * 1000).toLocaleString() : '—'}</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-lg bg-card border border-border p-4 space-y-3">
+                <p className="text-xs font-semibold text-primary">Assigned Reviewers and Hashes</p>
+                <div className="space-y-3">
+                  <div>
+                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">Assigned Reviewers</p>
+                    {previewRequest.approverDids.length > 0 ? (
+                      <div className="space-y-1.5">
+                        {previewRequest.approverDids.map((did, index) => (
+                          <div key={`${did}-${index}`} className="rounded-md bg-muted/50 px-3 py-2">
+                            <code className="text-xs font-mono break-all">{did}</code>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">No reviewers assigned.</p>
+                    )}
+                  </div>
+
+                  <div>
+                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Final Approver</p>
+                    <code className="text-xs font-mono break-all">{previewRequest.finalApproverDid || '—'}</code>
+                  </div>
+
+                  <div className="space-y-2">
+                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide">Uploaded Hashes</p>
+                    {REQUEST_ASSET_KEYS.some((asset) => previewRequest[asset.key]) ? (
+                      REQUEST_ASSET_KEYS.map((asset) => {
+                        const hash = previewRequest[asset.key]
+                        if (!hash) return null
+                        return (
+                          <div key={asset.key} className="rounded-md border border-border px-3 py-2">
+                            <p className="text-[10px] font-semibold text-muted-foreground mb-1">{asset.label}</p>
+                            <code className="text-xs font-mono break-all">{hash}</code>
+                          </div>
+                        )
+                      })
+                    ) : (
+                      <p className="text-xs text-muted-foreground">No uploaded hashes recorded.</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>
